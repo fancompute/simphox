@@ -1,0 +1,13 @@
+*.py?
+*~
+*.swp
+.cache
+__pycache__
+*.egg-info
+.env
+.env*
+.idea
+.DS_Store
+data/*
+aim_lib/*
+*.gds
