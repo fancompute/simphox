@@ -65,7 +65,7 @@ sfeast_scsrev.argtypes = dfeast_scsrev.argtypes = cfeast_hcsrev.argtypes = zfeas
 sfeast_scsrev.restype = dfeast_scsrev.restype = cfeast_hcsrev.restype = zfeast_hcsrev.restype = None
 
 
-from ..typing import Optional
+from .typing import Optional
 
 PARDISO_FREEFACTOR = -1
 PARDISO_FREEALL = 0

@@ -12,7 +12,7 @@ try:
 except ImportError:
     GPU_AVAIL = False
 
-from ..typing import Dim
+from .typing import Dim
 
 
 def xs_profile(grid: SimGrid, center: Tuple[float, ...], shape: Tuple[float, ...],

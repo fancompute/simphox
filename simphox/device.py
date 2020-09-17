@@ -1,7 +1,7 @@
 import numpy as np
 from .typing import Tuple, Dim2, Optional, Callable, List
 from .fdfd import FDFD
-from .utils import poynting_z
+from .utils import poynting_z, overlap
 from .viz import plot_field_2d, plot_power_2d
 from functools import lru_cache
 import copy
@@ -54,7 +54,7 @@ class Modes:
         """
         self.betas = betas.real
         self.modes = modes
-        self.fdfd = copy.deepcopy(fdfd)
+        self.fdfd = fdfd
         self.eps = fdfd.eps
         self.num_modes = self.m = len(self.betas)
 
@@ -190,17 +190,22 @@ class Modes:
         e_o, h_o = other_modes.e(), other_modes.h()
         return np.sum(poynting_z(e_o, h_i) + poynting_z(e_i, h_o)).real
 
-    def plot_sz(self, ax, idx: int = 0, title: str = "Poynting"):
+    def plot_sz(self, ax, idx: int = 0, title: str = "Poynting", include_n: bool = False,
+                title_size: float = 16, label_size=16):
         if idx > self.m - 1:
             ValueError("Out of range of number of solutions")
         plot_power_2d(ax, np.abs(self.sz(idx).real), self.eps, spacing=self.fdfd.spacing[0])
-        ax.set_title(rf'{title}, $n_{idx + 1} = {self.n(idx):.4f}$')
-        ax.text(x=0.9, y=0.9, s=rf'$s_z$', color='white', transform=ax.transAxes, fontsize=16)
+        if include_n:
+            ax.set_title(rf'{title}, $n_{idx + 1} = {self.n(idx):.4f}$', fontsize=title_size)
+        else:
+            ax.set_title(rf'{title}', fontsize=title_size)
+        ax.text(x=0.9, y=0.9, s=rf'$s_z$', color='white', transform=ax.transAxes, fontsize=label_size)
         ratio = np.max((self.te_ratios[idx], 1 - self.te_ratios[idx]))
         polarization = "TE" if np.argmax((self.te_ratios[idx], 1 - self.te_ratios[idx])) > 0 else "TM"
         ax.text(x=0.05, y=0.9, s=rf'{polarization}[{ratio:.2f}]', color='white', transform=ax.transAxes)
 
-    def plot_field(self, ax, idx: int = 0, axis: int = 1, use_e: bool = False, title: str = "Field"):
+    def plot_field(self, ax, idx: int = 0, axis: int = 1, use_e: bool = False, title: str = "Field",
+                   title_size: float=16, label_size=16):
         """
 
         Args:
@@ -219,11 +224,18 @@ class Modes:
         if not (axis == 0 or axis == 1 or axis == 2):
             ValueError("Out of range of number of solutions")
         plot_field_2d(ax, field[idx][axis].real, self.eps, spacing=self.fdfd.spacing[0])
-        ax.set_title(rf'{title}, $n_{idx + 1} = {self.n(idx):.4f}$')
-        ax.text(x=0.9, y=0.9, s=rf'$e_y$' if use_e else rf'$h_y$', color='black', transform=ax.transAxes, fontsize=16)
+        ax.set_title(rf'{title}, $n_{idx + 1} = {self.n(idx):.4f}$', fontsize=title_size)
+        ax.text(x=0.9, y=0.9, s=rf'$e_y$' if use_e else rf'$h_y$', color='black', transform=ax.transAxes,
+                fontsize=label_size)
         ratio = np.max((self.te_ratios[idx], 1 - self.te_ratios[idx]))
         polarization = "TE" if np.argmax((self.te_ratios[idx], 1 - self.te_ratios[idx])) > 0 else "TM"
         ax.text(x=0.05, y=0.9, s=rf'{polarization}[{ratio:.2f}]', color='black', transform=ax.transAxes)
+
+    def phase(self, length: float = 1):
+        return self.fdfd.k0 * length * self.n()
+
+    def overlap_fundamental(self, other_sol: "Modes"):
+        return overlap(self.e(), self.h(), other_sol.e(), other_sol.h()) ** 2
 
 
 class ModeDevice:
@@ -244,27 +256,30 @@ class ModeDevice:
         self.spacing = spacing
         self.nx = int(self.size[0] / spacing)
         self.ny = int(self.size[1] / spacing)
-        self.fdfd = FDFD(
-            shape=(self.nx, self.ny),
-            spacing=spacing,
-            wavelength=wavelength
-        )
+        self.wavelength = wavelength
         self.wg_height = wg_height
         self.wg = wg
         self.sub = sub
         self.rib_y = rib_y
 
     def solve(self, eps: np.ndarray, m: int = 6) -> Modes:
-        self.fdfd.eps = eps
-        beta, modes = self.fdfd.wgm_solve(num_modes=m, beta_guess=self.fdfd.k0 * np.sqrt(self.wg.material.eps))
-        solution = Modes(beta, modes, self.fdfd)
+        fdfd = FDFD(
+            shape=(self.nx, self.ny),
+            spacing=self.spacing,
+            wavelength=self.wavelength,
+            eps=eps
+        )
+        beta, modes = fdfd.wgm_solve(num_modes=m, beta_guess=fdfd.k0 * np.sqrt(self.wg.material.eps))
+        solution = Modes(beta, modes, fdfd)
         return solution
 
-    def single(self, ps: Optional[MaterialBlock] = None, sep: float = 0) -> np.ndarray:
+    def single(self, vert_ps: Optional[MaterialBlock] = None, lat_ps: Optional[MaterialBlock] = None,
+               sep: float = 0) -> np.ndarray:
         """Single-waveguide permittivity with an optional phase shifter block placed above
 
         Args:
-            ps: phase shifter block
+            vert_ps: vertical phase shifter block
+            lat_ps: lateral phase shifter block
             sep: separation betwen phase shifter and waveguide
 
         Returns:
@@ -273,24 +288,33 @@ class ModeDevice:
         """
         nx, ny = self.nx, self.ny
         center = nx // 2
-        wg, sub, dx = self.wg, self.sub, self.fdfd.spacing[0]
+        wg, sub, dx = self.wg, self.sub, self.spacing
         wg_y = (self.wg_height, self.wg_height + wg.y)
+
         xr_wg = (center - int(wg.x / 2 / dx), center + int(wg.x / 2 / dx))
-        yr_wg = (int(wg_y[0] / dx), int(wg_y[1] / dx))
+        yr_wg = slice(int(wg_y[0] / dx), int(wg_y[1] / dx))
         eps = np.ones((nx, ny))
         eps[:, :int(self.sub.y / dx)] = sub.material.eps
-        eps[xr_wg[0]:xr_wg[1], yr_wg[0]:yr_wg[1]] = wg.material.eps
+        eps[slice(*xr_wg), yr_wg] = wg.material.eps
         eps[:, int(self.sub.y / dx):int(self.sub.y / dx) + int(self.rib_y / dx)] = wg.material.eps
 
-        if ps is not None:
-            ps_y = (self.wg.y + self.wg_height + sep, self.wg.y + self.wg_height + sep + ps.y)
-            xr_ps = (center - int(ps.x / 2 / dx), center + int(ps.x / 2 / dx))
-            yr_ps = (int(ps_y[0] / dx), int(ps_y[1] / dx))
-            eps[xr_ps[0]:xr_ps[1], yr_ps[0]:yr_ps[1]] = ps.material.eps
+        if vert_ps is not None:
+            ps_y = (wg.y + self.wg_height + sep, wg.y + self.wg_height + sep + vert_ps.y)
+            xr_ps = slice(center - int(vert_ps.x / 2 / dx), center + int(vert_ps.x / 2 / dx))
+            yr_ps = slice(int(ps_y[0] / dx), int(ps_y[1] / dx))
+            eps[xr_ps, yr_ps] = vert_ps.material.eps
+
+        if lat_ps is not None:
+            xrps_l = slice(xr_wg[0] - int(lat_ps.x / dx) - int(sep / dx), xr_wg[0] - int(sep / dx))
+            xrps_r = slice(xr_wg[1] + int(sep / dx), xr_wg[1] + int(sep / dx) + int(lat_ps.x / dx))
+            eps[xrps_l, yr_wg] = lat_ps.material.eps
+            eps[xrps_r, yr_wg] = lat_ps.material.eps
 
         return eps
 
-    def coupled(self, gap: float, ps: Optional[MaterialBlock] = None, seps: Tuple[float, float] = (0, 0)) -> np.ndarray:
+    def coupled(self, gap: float, vert_ps: Optional[MaterialBlock] = None,
+                lat_ps: Optional[MaterialBlock] = None,
+                seps: Tuple[float, float] = (0, 0)) -> np.ndarray:
         """Coupled-waveguide permittivity with an optional pair of phase shifter blocks placed above
 
         Args:
@@ -304,30 +328,35 @@ class ModeDevice:
         """
         nx, ny = self.nx, self.ny
         center = nx // 2
-        wg, sub, dx = self.wg, self.sub, self.fdfd.spacing[0]
+        wg, sub, dx = self.wg, self.sub, self.spacing
         wg_y = (self.wg_height, self.wg_height + wg.y)
 
         xr_l = (center - int((gap / 2 + wg.x) / dx), center - int(gap / 2 / dx))
         xr_r = (center + int((gap / 2) / dx), center + int((gap / 2 + wg.x) / dx))
-        yr = (int(wg_y[0] / dx), int(wg_y[1] / dx))
+        yr = slice(int(wg_y[0] / dx), int(wg_y[1] / dx))
 
         eps = np.ones((nx, ny))
         eps[:, :int(sub.y / dx)] = sub.eps
-        eps[xr_l[0]:xr_l[1], yr[0]:yr[1]] = wg.eps
-        eps[xr_r[0]:xr_r[1], yr[0]:yr[1]] = wg.eps
+        eps[xr_l[0]:xr_l[1], yr] = wg.eps
+        eps[xr_r[0]:xr_r[1], yr] = wg.eps
         eps[:, int(self.sub.y / dx):int(self.sub.y / dx) + int(self.rib_y / dx)] = wg.material.eps
 
-        if ps is not None:
-            ps_y = (self.wg.y + self.wg_height + seps[0], self.wg.y + self.wg_height + seps[0] + ps.y)
-            ps_y_2 = (self.wg.y + self.wg_height + seps[1], self.wg.y + self.wg_height + seps[1] + ps.y)
-
+        if vert_ps is not None:
+            ps_y = (self.wg.y + self.wg_height + seps[0], self.wg.y + self.wg_height + seps[0] + vert_ps.y)
+            ps_y_2 = (self.wg.y + self.wg_height + seps[1], self.wg.y + self.wg_height + seps[1] + vert_ps.y)
             wg_l, wg_r = (xr_l[0] + xr_l[1]) / 2, (xr_r[0] + xr_r[1]) / 2
-            xrps_l = (int(wg_l - ps.x / dx / 2), int(wg_l + ps.x / dx / 2))
-            xrps_r = (int(wg_r - ps.x / dx / 2), int(wg_r + ps.x / dx / 2))
-            yr_ps = (int(ps_y[0] / dx), int(ps_y[1] / dx))
-            yr_ps2 = (int(ps_y_2[0] / dx), int(ps_y_2[1] / dx))
-            eps[xrps_l[0]:xrps_l[1], yr_ps[0]:yr_ps[1]] = ps.eps
-            eps[xrps_r[0]:xrps_r[1], yr_ps2[0]:yr_ps2[1]] = ps.eps
+            xrps_l = slice(int(wg_l - vert_ps.x / dx / 2), int(wg_l + vert_ps.x / dx / 2))
+            xrps_r = slice(int(wg_r - vert_ps.x / dx / 2), int(wg_r + vert_ps.x / dx / 2))
+            yr_ps = slice(int(ps_y[0] / dx), int(ps_y[1] / dx))
+            yr_ps2 = slice(int(ps_y_2[0] / dx), int(ps_y_2[1] / dx))
+            eps[xrps_l, yr_ps] = vert_ps.eps
+            eps[xrps_r, yr_ps2] = vert_ps.eps
+
+        if lat_ps is not None:
+            xrps_l = slice(xr_l[0] - int(lat_ps.x / dx) - int(seps[0] / dx), xr_l[0] - int(seps[0] / dx))
+            xrps_r = slice(xr_r[1] + int(seps[1] / dx), xr_r[1] + int(seps[1] / dx) + int(lat_ps.x / dx))
+            eps[xrps_l, yr] = lat_ps.eps
+            eps[xrps_r, yr] = lat_ps.eps
 
         return eps
 
