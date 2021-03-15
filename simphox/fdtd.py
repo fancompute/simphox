@@ -5,13 +5,8 @@ from typing import Tuple, List, Callable
 
 from .grid import SimGrid
 from .typing import Shape, Dim, GridSpacing, Optional, Union, Source, State
-from .utils import pml_params, curl, yee_avg
-
-try:
-    import cupy as cp
-    GPU_AVAIL = True
-except ImportError:
-    GPU_AVAIL = False
+from .utils import pml_params, curl_fn, yee_avg
+import jax.numpy as jnp
 
 
 class FDTD(SimGrid):
@@ -54,8 +49,8 @@ class FDTD(SimGrid):
             gpu: use the GPU to accelerate the computation
     """
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
-                 pml: Optional[Union[Shape, Dim]] = None, gpu: bool = False):
-        super(FDTD, self).__init__(shape, spacing, eps, pml=pml, gpu=gpu)
+                 pml: Optional[Union[Shape, Dim]] = None, use_jax: bool = False):
+        super(FDTD, self).__init__(shape, spacing, eps, pml=pml)
         self.dt = 1 / np.sqrt(np.sum(1 / self.spacing ** 2))  # includes courant condition!
 
         # pml (internal to the grid, so specified here!)
@@ -74,11 +69,17 @@ class FDTD(SimGrid):
                                 (slice(None), slice(None), slice(None), slice(-self.pml_shape[2], None)))
             self.cpml_be, self.cpml_bh = [b_e[s] for s in self.pml_regions], [b_h[s] for s in self.pml_regions]
             self.cpml_ce, self.cpml_ch = [c_e[s] for s in self.pml_regions], [c_h[s] for s in self.pml_regions]
-            if gpu:
-                self.cpml_be, self.cpml_bh = [cp.asarray(v) for v in self.cpml_be],\
-                                             [cp.asarray(v) for v in self.cpml_bh]
-                self.cpml_ce, self.cpml_ch = [cp.asarray(v) for v in self.cpml_ce],\
-                                             [cp.asarray(v) for v in self.cpml_ch]
+            if use_jax:
+                self.cpml_be, self.cpml_bh = [jnp.asarray(v) for v in self.cpml_be],\
+                                             [jnp.asarray(v) for v in self.cpml_bh]
+                self.cpml_ce, self.cpml_ch = [jnp.asarray(v) for v in self.cpml_ce],\
+                                             [jnp.asarray(v) for v in self.cpml_ch]
+            self.xp = jnp if use_jax else np
+            self.use_jax = use_jax
+            self._curl_h_pml = [self.curl_h_pml(pml_idx) for pml_idx in range(len(self.pml_regions))]
+            self._curl_e_pml = [self.curl_e_pml(pml_idx) for pml_idx in range(len(self.pml_regions))]
+        self._curl_e = self.curl_e(use_jax=self.use_jax)
+        self._curl_h = self.curl_h(use_jax=self.use_jax)
 
     @property
     def zero_state(self):
@@ -99,7 +100,7 @@ class FDTD(SimGrid):
         psi_h = None if self.pml_shape is None else [self.xp.zeros_like(e[s]) for s in self.pml_regions]
         return e, h, psi_e, psi_h
 
-    def step(self, state: State, src: np.ndarray, src_region: Optional[np.ndarray]) -> State:
+    def step_pml(self, state: State, src: np.ndarray, src_region: np.ndarray) -> State:
         """FDTD step (in the form of an RNNCell)
 
         Args:
@@ -120,26 +121,24 @@ class FDTD(SimGrid):
         src_region = tuple([slice(None)] * 4) if src_region is None else src_region
 
         # update pml in pml regions if specified
-        if self.pml_shape is not None:
-            for pml_idx, region in enumerate(self.pml_regions):
-                psi_e[pml_idx] = self.cpml_be[pml_idx] * psi_e[pml_idx] + self._curl_h_pml(h, pml_idx)
-                psi_h[pml_idx] = self.cpml_bh[pml_idx] * psi_h[pml_idx] + self._curl_e_pml(e, pml_idx)
+        for pml_idx, region in enumerate(self.pml_regions):
+            e_pml, h_pml = e[self.pml_regions[pml_idx]], h[self.pml_regions[pml_idx]]
+            psi_e[pml_idx] = self.cpml_be[pml_idx] * psi_e[pml_idx] + self._curl_h_pml[pml_idx](h_pml)
+            psi_h[pml_idx] = self.cpml_bh[pml_idx] * psi_h[pml_idx] + self._curl_e_pml[pml_idx](e_pml)
 
         # add source
         src = src.flatten() if isinstance(src_region, np.ndarray) else src.squeeze()
         e[src_region] += src * self.dt / self.eps_t[src_region]
 
         # update e field
-        e += self.curl_h(h) / self.eps_t * self.dt
-        if self.pml_shape is not None:
-            for pml_idx, region in enumerate(self.pml_regions):
-                e[region] += psi_e[pml_idx] / self.eps_t[region] * self.dt
+        e += self._curl_h(h) / self.eps_t * self.dt
+        for pml_idx, region in enumerate(self.pml_regions):
+            e[region] += psi_e[pml_idx] / self.eps_t[region] * self.dt
 
         # update h field
-        h -= self.curl_e(e) * self.dt
-        if self.pml_shape is not None:
-            for pml_idx, region in enumerate(self.pml_regions):
-                h[region] -= psi_h[pml_idx] * self.dt
+        h -= self._curl_e(e) * self.dt
+        for pml_idx, region in enumerate(self.pml_regions):
+            h[region] -= psi_h[pml_idx] * self.dt
 
         return e, h, psi_e, psi_h
 
@@ -168,7 +167,7 @@ class FDTD(SimGrid):
         for step in iterator:
             source = src[step] if isinstance(src, np.ndarray) else src(step * self.dt)
             source_idx = src_idx[step] if isinstance(src_idx, list) else src_idx
-            state = self.step(state, source, source_idx)
+            state = self.step_pml(state, source, source_idx)
         return state
 
     def _cpml(self, ax: int, alpha_max: float = 0, exp_scale: float = 3,
@@ -182,20 +181,20 @@ class FDTD(SimGrid):
         factor = sigma / (sigma + alpha * kappa) if alpha_max > 0 else 1
         return b, (b - 1) * factor / kappa
 
-    def _curl_e_pml(self, e: np.ndarray, pml_idx: int) -> np.ndarray:
+    def curl_e_pml(self, pml_idx: int) -> Callable[[np.ndarray], np.ndarray]:
         dx, _ = self._dxes
         c, s = self.cpml_ce[pml_idx], self.pml_regions[pml_idx][1:]
-        e_pml = e[self.pml_regions[pml_idx]]
-        return curl(e_pml, lambda e_, ax: (self.xp.roll(e_, -1, axis=ax) - e_) / dx[ax][s] * c[ax])
+        de = lambda e_, ax: (self.xp.roll(e_, -1, axis=ax) - e_) / dx[ax][s] * c[ax]
+        return curl_fn(de, use_jax=self.use_jax)
 
-    def _curl_h_pml(self, h: np.ndarray, pml_idx: int) -> np.ndarray:
+    def curl_h_pml(self, pml_idx: int) -> Callable[[np.ndarray], np.ndarray]:
         _, dx = self._dxes
         c, s = self.cpml_ch[pml_idx], self.pml_regions[pml_idx][1:]
-        h_pml = h[self.pml_regions[pml_idx]]
-        return curl(h_pml, lambda h_, ax: (h_ - self.xp.roll(h_, 1, axis=ax)) / dx[ax][s] * c[ax])
+        dh = lambda h_, ax: (h_ - self.xp.roll(h_, 1, axis=ax)) / dx[ax][s] * c[ax]
+        return curl_fn(dh, use_jax=self.use_jax)
 
     @property
     @lru_cache()
     def eps_t(self):
         eps_t = yee_avg(self.eps, shift=self.yee_avg)
-        return cp.asarray(eps_t) if self.gpu else eps_t
+        return self.xp.asarray(eps_t)

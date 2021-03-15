@@ -1,3 +1,8 @@
+from .primitives import spsolve
+from .utils import d2curl_op, yee_avg, yee_avg_2d, curl_fn
+from .grid import SimGrid
+from .typing import Shape, Dim, GridSpacing, Optional, Tuple, Union, SpSolve, Shape2, Dim2
+
 from functools import lru_cache
 
 import numpy as np
@@ -5,13 +10,22 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import eigs
 from typing import Callable
 
-from .grid import SimGrid
-from .typing import Shape, Dim, GridSpacing, Optional, Tuple, Union, SpSolve, Shape2, Dim2
+import jax
+import jax.numpy as jnp
+from jax.config import config
+
+config.parse_flags_with_absl()
+from jax.scipy.sparse.linalg import bicgstab
+from jax.experimental.optimizers import adam, sgd
 
 try:  # pardiso (using Intel MKL) is much faster than scipy's solver
-    from .mkl import spsolve, feast_eigs
+    from .mkl import spsolve_pardiso, feast_eigs
 except OSError:  # if mkl isn't installed
     from scipy.sparse.linalg import spsolve
+
+from logging import getLogger
+
+logger = getLogger()
 
 
 class FDFD(SimGrid):
@@ -48,15 +62,15 @@ class FDFD(SimGrid):
         pml: Perfectly matched layer (PML) of thickness on both sides of the form :code:`(x_pml, y_pml, z_pml)`
         pml_eps: The permittivity used to scale the PML (should probably assign to 1 for now)
         yee_avg: whether to do a yee average (highly recommended)
-        no_grad: Whether to store gradient information (dummy parameter)
+        np: Numpy to use (dummy parameter)
     """
+
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
                  wavelength: float = 1.55, bloch_phase: Union[Dim, float] = 0.0,
                  pml: Optional[Union[Shape, Dim]] = None, pml_eps: float = 1.0,
-                 yee_avg: bool = True, no_grad: bool = True):
+                 yee_avg: bool = True, use_jax: bool = True):
 
         self.wavelength = wavelength
-        self.no_grad = no_grad
 
         super(FDFD, self).__init__(
             shape=shape,
@@ -88,35 +102,114 @@ class FDFD(SimGrid):
         Returns:
             Electric field operator :math:`A` for solving Maxwell's equations at frequency :math:`omega`.
         """
-        if self.no_grad:
-            mat = self.curl_curl - self.k0 ** 2 * sp.diags(self.eps_t.flatten())
-            return mat
-        else:
-            data, rc = self.curl_curl_coo
-            data_param = self.k0 ** 2 * self.eps_t.flatten()
-            rc_param = np.hstack((np.arange(self.n * 3), np.arange(self.n * 3)))
-            # TODO(sunil): change this to bd.hstack for autograd, torch, tf
-            return np.hstack((data_param, data)), np.hstack((rc_param, rc))
+        mat = self.curl_curl - self.k0 ** 2 * sp.diags(self.eps_t.flatten())
+        return mat
 
     A = mat  # alias A (common symbol for FDFD matrix) to mat
 
     @property
-    def matz(self) -> Union[sp.spmatrix, Tuple[np.ndarray, np.ndarray]]:
+    def matz(self) -> sp.spmatrix:
         """Build the discrete Maxwell operator :math:`A_z(k_0)` acting on :math:`\mathbf{e}_z` (for 2D problems).
 
         Returns:
             Electric field operator :math:`A_z` for a source with z-polarized e-field.
         """
+        mat = self.ddz - self.k0 ** 2 * sp.diags(self.eps_t[2].flatten())
+        return mat
 
-        if self.no_grad:
-            mat = self.ddz - self.k0 ** 2 * sp.diags(self.eps_t[2].flatten())
-            return mat
+    def opt_solver(self, src: np.ndarray, transform_fn: Optional[Callable] = None) -> Callable:
+        """Initialize the optimization problem solver given two callable functions:
+
+        1. A numpy array source :code:`src`
+        2. The JAX-transformable transform function :code:`transform_fn` (e.g. transform) (identity if None)
+
+        Args:
+            transform_fn: Transforms parameters to yield the epsilon function used by jax
+
+        Returns:
+            A solve function (2d or 3d based on defined :code:`ndim` specified for the instance of :code:`FDFD`)
+
+        """
+
+        if transform_fn is None:
+            def transform_fn(x):
+                return x
+        src = jnp.ravel(jnp.array(src))
+        k0 = self.k0
+
+        if self.ndim == 2:
+            ddz: sp.coo_matrix = self.ddz.tocoo()
+            ddz_entries, ddz_indices = jnp.array(ddz.data, dtype=np.complex), \
+                                       jnp.vstack((jnp.array(ddz.row), jnp.array(ddz.col)))
+            mat_indices = jnp.hstack((jnp.vstack((jnp.arange(self.n), jnp.arange(self.n))), ddz_indices))
+
+            @jax.jit
+            def solve_2d(rho: jnp.ndarray):
+                mat_entries = jnp.hstack((-jnp.ravel(yee_avg_2d(transform_fn(rho))) * k0 ** 2, ddz_entries))
+                return spsolve(mat_entries, k0 * src, mat_indices)
+
+            return solve_2d
         else:
-            dd: sp.coo_matrix = self.ddz.tocoo()
-            data_param = self.k0 ** 2 * self.eps_t[2].flatten()
-            rc_param = np.hstack((np.arange(self.n), np.arange(self.n)))
-            # TODO(sunil): change this to bd.hstack for autograd, torch, tf
-            return np.hstack((data_param, dd.data)), np.hstack((rc_param, np.vstack((dd.row, dd.col))))
+
+            curl_e = curl_fn(self._diff_fn(use_h=False, use_jax=True), use_jax=True)
+            curl_h = curl_fn(self._diff_fn(use_h=True, use_jax=True), use_jax=True)
+
+            def op(eps: jnp.ndarray):
+                return lambda b: curl_h(curl_e(b)) - k0 ** 2 * eps * b
+
+            @jax.jit
+            def solve_3d(rho: jnp.ndarray):
+                eps = transform_fn(rho)
+                return bicgstab(op(eps), k0 * src)
+
+            return solve_3d
+
+    def opt_run(self, src: np.ndarray, obj_fn: Optional[Callable], rho_init: np.ndarray, num_iters: int,
+                transform_fn: Optional[Callable] = None, update_eps: int = 0, pbar: Optional[Callable] = None,
+                step_size: float = 1):
+        """Run the optimization
+
+            Args:
+                src: A numpy array source
+                obj_fn: The JAX-transformable objective function
+                    that takes in output of solve_fn from :code:`opt_solver`.
+                rho_init: Initial parameters for the optimizer (:code:`eps` if :code:`None`)
+                num_iters: number of iterations to run
+                transform_fn: The JAX-transformable transform function to yield epsilon (identity if None)
+                update_eps: iteration interval over which to update :code:`eps` based on :code:`p`
+                    (default 0, no update until end).
+                step_size: For the Adam update, specify the step size needed.
+
+            Returns:
+                A tuple of the final eps distribution (:code:`transform_fn(p)`) and parameters :code:`p`
+
+        """
+        solve_fn = self.opt_solver(src, transform_fn)
+
+        opt_init, opt_update, get_params = adam(step_size=step_size)
+        opt_state = opt_init(rho_init)
+
+        def obj_fn_p(p: jnp.ndarray):
+            return obj_fn(solve_fn(p))
+
+        # Define a compiled update step
+        def step_(i, opt_state):
+            v, g = jax.value_and_grad(obj_fn_p)(get_params(opt_state))
+            return v, opt_update(i, g, opt_state)
+
+        step = jax.jit(step_, backend='cpu' if self.ndim == 2 else 'gpu')
+
+        iterator = pbar(range(num_iters)) if pbar is not None else range(num_iters)
+
+        for i in iterator:
+            v, opt_state = step(i, opt_state)
+            if update_eps > 0 and i % update_eps == 0:
+                rho = get_params(opt_state)
+                self.eps = rho if transform_fn is None else transform_fn(rho)
+            iterator.set_description(f"𝓛: {v:.5f}")
+        rho = get_params(opt_state)
+        self.eps = rho if transform_fn is None else transform_fn(rho)
+        return np.asarray(self.eps), np.asarray(rho)
 
     Az = matz
 
@@ -167,7 +260,7 @@ class FDFD(SimGrid):
 
         """
         e = self.reshape(e) if e.ndim == 2 else e
-        return self.curl_e(e, beta) / (1j * self.k0)
+        return self.curl_e(beta)(e) / (1j * self.k0)
 
     def h2e(self, h: np.ndarray, beta: Optional[float] = None) -> np.ndarray:
         """
@@ -184,7 +277,7 @@ class FDFD(SimGrid):
 
         """
         h = self.reshape(h) if h.ndim == 2 else h
-        return self.curl_h(h, beta) / (1j * self.k0 * self.eps_t)
+        return self.curl_h(beta)(h) / (1j * self.k0 * self.eps_t)
 
     def solve(self, src: np.ndarray, solver_fn: Optional[SpSolve] = None, reshaped: bool = True,
               iterative: int = -1, callback: Optional[Callable] = None) -> np.ndarray:
@@ -208,9 +301,9 @@ class FDFD(SimGrid):
                 M = sp.linalg.LinearOperator(self.mat.shape, sp.linalg.spilu(self.mat).solve)
                 e = sp.linalg.gmres(self.mat, b, M=M) if iterative == 1 else sp.linalg.bicgstab(self.mat, b, M=M)
             else:
-                e = solver_fn(self.mat, b) if solver_fn else spsolve(self.mat, b)
+                e = solver_fn(self.mat, b) if solver_fn else spsolve_pardiso(self.mat, b)
         elif b.size == self.n:  # assume only the z component
-            ez = solver_fn(self.matz, b) if solver_fn else spsolve(self.matz, b)
+            ez = solver_fn(self.matz, b) if solver_fn else spsolve_pardiso(self.matz, b)
             o = np.zeros_like(ez)
             e = np.vstack((o, o, ez))
         else:
@@ -319,6 +412,7 @@ class FDFD(SimGrid):
                 (d[-t:] - d[-t]) / (p[-1] - d[-t])
             ))
             return 1 + 1j * (exp_scale + 1) * (d_pml ** exp_scale) * log_reflection / (2 * absorption_corr)
+
         return _scpml(pe), _scpml(ph)
 
     def effective_fdfd2d(self, x: Union[Shape2, Dim2], y: Union[Shape2, Dim2]):
@@ -362,7 +456,7 @@ class FDFD(SimGrid):
     @property
     @lru_cache()
     def curl_curl(self) -> sp.spmatrix:
-        curl_curl: sp.spmatrix = self.curl_b @ self.curl_f
+        curl_curl: sp.spmatrix = d2curl_op(self.db) @ d2curl_op(self.df)
         curl_curl.sort_indices()  # for the solver
         return curl_curl
 
@@ -372,17 +466,3 @@ class FDFD(SimGrid):
         ddz = -db[0] @ df[0] - db[1] @ df[1]
         ddz.sort_indices()  # for the solver
         return ddz
-
-    @property
-    @lru_cache()
-    def curl_curl_coo(self) -> Tuple[np.ndarray, np.ndarray]:
-        curl_curl: sp.coo_matrix = self.curl_curl.tocoo()
-        rc_curl_curl = np.vstack((curl_curl.row, curl_curl.col))
-        return curl_curl.data, rc_curl_curl
-
-    @property
-    @lru_cache()
-    def ddz_coo(self) -> Tuple[np.ndarray, np.ndarray]:
-        ddz: sp.coo_matrix = self.ddz.tocoo()
-        rc_curl_curl = np.vstack((ddz.row, ddz.col))
-        return ddz.data, rc_curl_curl

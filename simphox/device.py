@@ -205,7 +205,7 @@ class Modes:
         ax.text(x=0.05, y=0.9, s=rf'{polarization}[{ratio:.2f}]', color='white', transform=ax.transAxes)
 
     def plot_field(self, ax, idx: int = 0, axis: int = 1, use_e: bool = False, title: str = "Field",
-                   title_size: float=16, label_size=16):
+                   title_size: float=16, label_size=16, include_n: bool = False):
         """
 
         Args:
@@ -224,7 +224,10 @@ class Modes:
         if not (axis == 0 or axis == 1 or axis == 2):
             ValueError("Out of range of number of solutions")
         plot_field_2d(ax, field[idx][axis].real, self.eps, spacing=self.fdfd.spacing[0])
-        ax.set_title(rf'{title}, $n_{idx + 1} = {self.n(idx):.4f}$', fontsize=title_size)
+        if include_n:
+            ax.set_title(rf'{title}, $n_{idx + 1} = {self.n(idx):.4f}$', fontsize=title_size)
+        else:
+            ax.set_title(rf'{title}', fontsize=title_size)
         ax.text(x=0.9, y=0.9, s=rf'$e_y$' if use_e else rf'$h_y$', color='black', transform=ax.transAxes,
                 fontsize=label_size)
         ratio = np.max((self.te_ratios[idx], 1 - self.te_ratios[idx]))
@@ -240,15 +243,15 @@ class Modes:
 
 class ModeDevice:
     def __init__(self, wg: MaterialBlock, sub: MaterialBlock, size: Tuple[float, float], wg_height: float,
-                 wavelength: float = 1.55, spacing: float = 0.01, rib_y: float = 0):
+                 spacing: float = 0.01, rib_y: float = 0):
         """A :code:`ModeDevice` can be used to efficiently simulate various scenarios for coupled waveguides
+        and phase shifters.
 
         Args:
             wg: Waveguide :code:`MaterialBlock`
             sub: Substrate :code:`MaterialBlock`
             size: Size of the overall simulation (in arb. units)
             wg_height: Size of the overall simulation (in arb. units)
-            wavelength: Wavelength for the mode solver (in arb. units)
             spacing: Spacing for the simulation (recommended at least 10 pixels per wavelength in high-index material)
             rib_y: Rib height (from substrate to partial etch cutoff)
         """
@@ -256,17 +259,16 @@ class ModeDevice:
         self.spacing = spacing
         self.nx = int(self.size[0] / spacing)
         self.ny = int(self.size[1] / spacing)
-        self.wavelength = wavelength
         self.wg_height = wg_height
         self.wg = wg
         self.sub = sub
         self.rib_y = rib_y
 
-    def solve(self, eps: np.ndarray, m: int = 6) -> Modes:
+    def solve(self, eps: np.ndarray, m: int = 6, wavelength: float = 1.55) -> Modes:
         fdfd = FDFD(
             shape=(self.nx, self.ny),
             spacing=self.spacing,
-            wavelength=self.wavelength,
+            wavelength=wavelength,
             eps=eps
         )
         beta, modes = fdfd.wgm_solve(num_modes=m, beta_guess=fdfd.k0 * np.sqrt(self.wg.material.eps))
@@ -365,7 +367,8 @@ class ModeDevice:
         """Tunable directional coupler grid sweep
 
         Args:
-            seps: separations to sweep, for :math:`S` separations, the resulting solution grid will be :math:`S \\times S`
+            seps: separations to sweep, for :math:`S` separations,
+            the resulting solution grid will be :math:`S \\times S`
             gap: coupling gap for the interaction region
             ps: phase shifter :code:`MaterialBlock`
             m: Number of modes to find
@@ -373,7 +376,6 @@ class ModeDevice:
 
         Returns:
             A list of :math:`S^2` :code:`Modes` solution objects
-
 
         """
         solutions = []
@@ -389,10 +391,10 @@ class ModeDevice:
         """Phase shifter sweep
 
         Args:
-            seps: separations to sweep, for :math:`S` separations, the resulting solution will be of length :math:`S`
-            ps: phase shifter :code:`MaterialBlock`
+            seps: Separations to sweep, for :math:`S` separations, the resulting solution will be of length :math:`S`
+            ps: Phase shifter :code:`MaterialBlock`
             m: Number of modes to find
-            pbar: progress bar handle (to show progress using e.g. tqdm)
+            pbar: Progress bar handle (to show progress using e.g. tqdm)
 
         Returns:
             A list of :math:`S` :code:`Modes` solution objects
@@ -405,23 +407,21 @@ class ModeDevice:
             solutions.append(copy.deepcopy(self.solve(eps, m)))
         return solutions
 
+    def dispersion_sweep(self, eps: np.ndarray, wavelengths: np.ndarray, m: int = 6, pbar: Callable = None):
+        """Dispersion sweep for cross sectional modes
 
-def dispersion_sweep(device: ModeDevice, lmbdas: np.ndarray, pbar: Callable):
-    """Dispersion sweep for cross sectional modes
+        Args:
+            eps: Epsilon distribution for the sweep
+            wavelengths: Wavelengths :math:`\\lambda` of length :math:`L`
+            m: Number of modes to solve
+            pbar: Progress bar handle (to show progress using e.g. tqdm)
 
-    Args:
-        device: :code:`ModeDevice`
-        lmbdas: Wavelengths :math:`\\lambda` of length :math:`L`
-        pbar: progress bar handle (to show progress using e.g. tqdm)
+        Returns:
+            A list of :math:`L` :code:`Modes` solution objects
 
-    Returns:
-        A list of :math:`L` :code:`Modes` solution objects
-
-    """
-    solutions = []
-    fdfd = device.fdfd
-    for lmbda in pbar(lmbdas):
-        fdfd.wavelength = lmbda
-        beta, modes = fdfd.wgm_solve(num_modes=6)
-        solutions.append(copy.deepcopy(Modes(beta, modes, device.fdfd)))
-    return solutions
+        """
+        solutions = []
+        pbar = range if pbar is None else pbar
+        for wavelength in pbar(wavelengths):
+            solutions.append(self.solve(eps, m, wavelength))
+        return solutions

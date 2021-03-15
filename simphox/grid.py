@@ -1,17 +1,12 @@
 from functools import lru_cache
 
+import jax.numpy as jnp
 import numpy as np
 import scipy.sparse as sp
 
-try:
-    import cupy as cp
-    GPU_AVAIL = True
-except ImportError:
-    GPU_AVAIL = False
-
-from .component import Component
+from .component import Component, Callable
 from .typing import Shape, Dim, GridSpacing, Optional, List, Union
-from .utils import d2curl_op, curl, yee_avg
+from .utils import curl_fn, yee_avg
 
 
 class Grid:
@@ -40,15 +35,6 @@ class Grid:
         self.cell_sizes = [self.spacing[i] * np.ones((self.shape[i],))
                            if i < self.ndim else np.ones((1,)) for i in range(3)]
         self.pos = [np.hstack((0, np.cumsum(dx))) if dx.size > 1 else None for dx in self.cell_sizes]
-        if self.ndim == 1:
-            self.mesh_pos = np.mgrid[:self.size[0]:self.spacing[0]]
-        elif self.ndim == 2:
-            self.mesh_pos = np.stack(np.mgrid[:self.size[0]:self.spacing[0], :self.size[1]:self.spacing[1]],
-                                     axis=0)
-        else:
-            self.mesh_pos = np.stack(np.mgrid[:self.size[0]:self.spacing[0],
-                                     :self.size[1]:self.spacing[1],
-                                     :self.size[2]:self.spacing[2]], axis=0)
         self.components = []
 
     @classmethod
@@ -83,7 +69,7 @@ class Grid:
             shape = (np.asarray((x, y, height)) / spacing).astype(np.int)
         else:
             shape = (np.asarray((x, y)) / spacing).astype(np.int)
-        grid = cls(shape, spacing)
+        grid = cls(shape, spacing, eps=bg_eps)
         grid.fill(comp_eps, comp_z + rib_t)
         grid.fill(sub_eps, sub_z)
         grid.add(comp, comp_eps, comp_z, comp_t)
@@ -143,7 +129,7 @@ class Grid:
 class SimGrid(Grid):
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
                  bloch_phase: Union[Dim, float] = 0.0, pml: Optional[Union[int, Shape, Dim]] = None,
-                 pml_eps: float = 1.0, yee_avg: int = 1, gpu: bool = False):
+                 pml_eps: float = 1.0, yee_avg: int = 1):
         """The base :code:`SimGrid` class (adding things to :code:`Grid` like Yee grid support, Bloch phase,
         PML shape, etc.).
 
@@ -155,7 +141,6 @@ class SimGrid(Grid):
             pml: Perfectly matched layer (PML) of thickness on both sides of the form :code:`(x_pml, y_pml, z_pml)`
             pml_eps: The permittivity used to scale the PML (should probably assign to 1 for now)
             yee_avg: whether to do a yee average (highly recommended)
-            gpu: whether to run on GPU (mostly useful for FDTD, BPM)
         """
         super(SimGrid, self).__init__(shape, spacing, eps)
         self.pml_shape = np.asarray(pml, dtype=np.int) if isinstance(pml, tuple) else pml
@@ -176,13 +161,9 @@ class SimGrid(Grid):
                                  f'got ({len(self.bloch)}, {len(self.shape)}).')
         self.dtype = np.float64 if pml is None and bloch_phase == 0 else np.complex128
         self._dxes = np.meshgrid(*self.cell_sizes, indexing='ij'), np.meshgrid(*self.cell_sizes, indexing='ij')
-        if gpu:
-            self._dxes = cp.asarray(self._dxes[0]), cp.asarray(self._dxes[1])
-        self.xp = cp if gpu else np
-        self.gpu = gpu
 
     def deriv(self, back: bool = False) -> List[sp.spmatrix]:
-        """Calculate directional derivative (cached, since this does not depend on any params)
+        """Calculate directional derivative
 
         Args:
             back: Return backward derivative
@@ -221,15 +202,18 @@ class SimGrid(Grid):
     def db(self):
         return self.deriv(back=True)
 
-    @property
-    def curl_f(self):
-        return d2curl_op(self.df)
+    def _diff_fn(self, use_h: bool = False, use_jax: bool = False):
+        xp = jnp if use_jax else np
+        dx = jnp.array(self._dxes[use_h]) if use_jax else self._dxes[use_h]
+        if use_h:
+            def _diff(f, a):
+                return (f - xp.roll(f, 1, axis=a)) / dx[a]
+        else:
+            def _diff(f, a):
+                return (xp.roll(f, -1, axis=a) - f) / dx[a]
+        return _diff
 
-    @property
-    def curl_b(self):
-        return d2curl_op(self.db)
-
-    def curl_e(self, e, beta: Optional[float] = None) -> np.ndarray:
+    def curl_e(self, beta: Optional[float] = None, use_jax: bool = False) -> Callable[[np.ndarray], np.ndarray]:
         """Get the curl of the electric field :math:`\mathbf{E}`
 
         Args:
@@ -240,11 +224,9 @@ class SimGrid(Grid):
             The discretized curl :math:`\\nabla \times \mathbf{E}`
 
         """
-        def de(e_, d):
-            return (self.xp.roll(e_, -1, axis=d) - e_) / self._dxes[0][d]
-        return curl(e, de, beta)
+        return curl_fn(self._diff_fn(use_h=False, use_jax=use_jax), use_jax=use_jax, beta=beta)
 
-    def curl_h(self, h, beta: Optional[float] = None) -> np.ndarray:
+    def curl_h(self, beta: Optional[float] = None, use_jax: bool = False) -> Callable[[np.ndarray], np.ndarray]:
         """Get the curl of the magnetic field :math:`\mathbf{H}`
 
            Args:
@@ -255,9 +237,7 @@ class SimGrid(Grid):
                The discretized curl :math:`\\nabla \times \mathbf{H}`
 
         """
-        def dh(h_, d):
-            return (h_ - self.xp.roll(h_, 1, axis=d)) / self._dxes[1][d]
-        return curl(h, dh, beta)
+        return curl_fn(self._diff_fn(use_h=True, use_jax=use_jax), use_jax=use_jax, beta=beta)
 
     @property
     @lru_cache()

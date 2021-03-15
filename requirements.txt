@@ -5,3 +5,4 @@ shapely
 gdspy
 descartes
 nazca
+jax

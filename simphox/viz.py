@@ -35,7 +35,7 @@ def plot_eps_2d(ax, eps: np.ndarray, spacing: Optional[float] = None, cmap: str 
 
     """
     extent = get_extent_2d(ax, eps.shape, spacing)
-    ax.imshow(eps.T, cmap=cmap, origin='lower left', alpha=1, extent=extent)
+    ax.imshow(eps.T, cmap=cmap, origin='lower', alpha=1, extent=extent)
 
 
 def plot_field_2d(ax, field: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Optional[float] = None,
@@ -59,7 +59,7 @@ def plot_field_2d(ax, field: np.ndarray, eps: Optional[np.ndarray] = None, spaci
         plot_eps_2d(ax, eps, spacing, mat_cmap)
     im_val = field * np.sign(field.flat[np.abs(field).argmax()])
     norm = mcolors.DivergingNorm(vcenter=0, vmin=-im_val.max(), vmax=im_val.max())
-    ax.imshow(im_val.T, cmap=cmap, origin='lower left', alpha=alpha, extent=extent, norm=norm)
+    ax.imshow(im_val.T, cmap=cmap, origin='lower', alpha=alpha, extent=extent, norm=norm)
 
 
 def plot_power_2d(ax, power: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Optional[float] = None,
@@ -81,7 +81,7 @@ def plot_power_2d(ax, power: np.ndarray, eps: Optional[np.ndarray] = None, spaci
     extent = get_extent_2d(ax, power.shape, spacing)
     if eps is not None:
         plot_eps_2d(ax, eps, spacing, mat_cmap)
-    ax.imshow(power.T, cmap=cmap, origin='lower left', alpha=alpha, extent=extent)
+    ax.imshow(power.T, cmap=cmap, origin='lower', alpha=alpha, extent=extent)
 
 
 def plot_power_3d(plot: k3d.Plot, power: np.ndarray, eps: Optional[np.ndarray] = None, axis: int = 0,

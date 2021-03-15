@@ -300,18 +300,12 @@ pardiso = Pardiso()
 feast = Feast()
 
 
-def spsolve(mat: sp.spmatrix, rhs: np.ndarray):
+def spsolve_pardiso(mat: sp.spmatrix, rhs: np.ndarray):
     if not isinstance(mat, sp.spmatrix):
         raise TypeError(f'mat must be an instance of spmatrix but got {type(mat)}')
     if not isinstance(rhs, np.ndarray):
         raise TypeError(f'mat must be an instance of ndarray but got {type(rhs)}')
     return pardiso.solve(mat.tocsr(), rhs)
-
-
-def spsolve_raw(data_rc: Tuple[np.ndarray, np.ndarray], rhs: np.ndarray):
-    data, rc = data_rc
-    mat = sp.coo_matrix((data, rc)).tocsr()  # need coo matrix to add duplicate elements!
-    return spsolve(mat, rhs)
 
 
 def feast_eigs(mat: sp.spmatrix, erange: Tuple[float, float], k: int = 6, symmetric: bool = True):

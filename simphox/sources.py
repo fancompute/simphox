@@ -15,20 +15,21 @@ except ImportError:
 from .typing import Dim
 
 
-def xs_profile(grid: SimGrid, center: Tuple[float, ...], shape: Tuple[float, ...],
-               axis: int = 0, wavelength: float = 1.55, mode_idx: int = 0):
+def xs_profile(grid: SimGrid, center: Tuple[float, ...], size: Tuple[float, ...],
+               axis: int = 0, wavelength: float = 1.55, mode_idx: int = 0, sparse: bool = True):
     """
 
     Args:
         grid: simulation grid (e.g., :code:`FDFD`, :code:`FDTD`, :code:`BPM`)
-        center: center tuple of the form :code:`(x, y, z)`
-        shape: size of the source
+        center: center tuple of the form :code:`(x, y, z)` (in sim units, NOT pixels)
+        size: size of the source (in sim units, NOT pixels)
         axis: axis for normal vector of cross-section (one of :code:`(0, 1, 2)`)
         wavelength: wavelength (arb. units, should match with spacing)
         mode_idx: mode index for the eigenmode for source profile
+        sparse: Only return nonzero elements and slice of cross section
     """
     center = (np.asarray(center) // grid.spacing[0]).astype(np.int)  # assume isotropic for now...
-    shape = (np.asarray(shape) // grid.spacing[0]).astype(np.int)
+    shape = (np.asarray(size) // grid.spacing[0]).astype(np.int)
     if grid.ndim == 1:
         raise ValueError(f"Simulation dimension ndim must be 2 or 3 but got {grid.ndim}.")
     if shape.size == 2:
@@ -48,10 +49,19 @@ def xs_profile(grid: SimGrid, center: Tuple[float, ...], shape: Tuple[float, ...
         eps=mode_eps, wavelength=wavelength
     )
     beta, mode = src_fdfd.src(mode_idx=mode_idx, return_beta=True)
-    mode = np.expand_dims(mode, axis + 1)
+    mode = np.expand_dims(mode.squeeze(), axis + 1)
     if grid.ndim == 3:
-        mode = np.stack((mode[2], mode[1], mode[0]))  # re-orient the source directions
-    return mode, (slice(None), *s)
+        mode = np.stack((mode[0], mode[1], mode[2]))  # re-orient the source directions
+    if sparse:
+        return mode, (slice(None), *s)
+    else:
+        if grid.ndim == 3:
+            x = np.zeros((3, *grid.shape3), dtype=np.complex)
+            x[:, s[0], s[1], s[2]] = mode
+        else:
+            x = np.zeros(grid.shape, dtype=np.complex)
+            x[s[0], s[1]] = mode.flat
+        return x
 
 
 def tfsf_profile(grid: SimGrid, q_mask: np.ndarray, wavelength: float, k: Dim):

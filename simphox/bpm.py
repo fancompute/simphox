@@ -40,7 +40,7 @@ class BPM(SimGrid):
         center = (0, self.shape[1] // 2, self.shape[2] // 2) if center is None else center
         shape = self.eps[0].shape if shape is None else shape
         self.x = center[0]
-        self.beta, _, self.e, self.h = xs_profile(self, center=center, shape=shape, axis=axis)
+        self.beta, _, self.e, self.h = xs_profile(self, center=center, size=shape, axis=axis)
 
     def adi_polarized(self, te: bool = True):
         """The ADI step for beam propagation method based on https://publik.tuwien.ac.at/files/PubDat_195610.pdf
