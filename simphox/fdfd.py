@@ -1,3 +1,5 @@
+from holoviews import opts
+
 from .primitives import spsolve
 from .utils import d2curl_op, yee_avg, yee_avg_2d, curl_fn
 from .grid import SimGrid
@@ -8,15 +10,17 @@ from functools import lru_cache
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import eigs
-from typing import Callable
+from typing import Callable, List
 
 import jax
 import jax.numpy as jnp
 from jax.config import config
 
+from .viz import get_extent_2d
+
 config.parse_flags_with_absl()
 from jax.scipy.sparse.linalg import bicgstab
-from jax.experimental.optimizers import adam, sgd
+from jax.experimental.optimizers import adam
 
 try:  # pardiso (using Intel MKL) is much faster than scipy's solver
     from .mkl import spsolve_pardiso, feast_eigs
@@ -24,6 +28,9 @@ except OSError:  # if mkl isn't installed
     from scipy.sparse.linalg import spsolve
 
 from logging import getLogger
+import holoviews as hv
+from holoviews.streams import Pipe
+import panel as pn
 
 logger = getLogger()
 
@@ -57,20 +64,15 @@ class FDFD(SimGrid):
         shape: Tuple of size 1, 2, or 3 representing the number of pixels in the grid
         spacing: Spacing (microns) between each pixel along each axis (must be same dim as `grid_shape`)
         eps: Relative permittivity :math:`\\epsilon_r`
-        wavelength: Wavelength :math:`\\lambda`
         bloch_phase: Bloch phase (generally useful for angled scattering sims)
         pml: Perfectly matched layer (PML) of thickness on both sides of the form :code:`(x_pml, y_pml, z_pml)`
         pml_eps: The permittivity used to scale the PML (should probably assign to 1 for now)
         yee_avg: whether to do a yee average (highly recommended)
-        np: Numpy to use (dummy parameter)
     """
 
-    def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
-                 wavelength: float = 1.55, bloch_phase: Union[Dim, float] = 0.0,
-                 pml: Optional[Union[Shape, Dim]] = None, pml_eps: float = 1.0,
-                 yee_avg: bool = True, use_jax: bool = True):
-
-        self.wavelength = wavelength
+    def __init__(self, shape: Shape, spacing: GridSpacing, wavelength: float = 1.55, eps: Union[float, np.ndarray] = 1,
+                 bloch_phase: Union[Dim, float] = 0.0, pml: Optional[Union[Shape, Dim]] = None,
+                 pml_eps: float = 1.0, yee_avg: bool = True):
 
         super(FDFD, self).__init__(
             shape=shape,
@@ -81,6 +83,8 @@ class FDFD(SimGrid):
             pml_eps=pml_eps,
             yee_avg=yee_avg
         )
+
+        self.wavelength = wavelength
 
         # overwrite dxes with PML-scaled ones if specified
         if self.pml_shape is not None:
@@ -93,7 +97,7 @@ class FDFD(SimGrid):
 
     @property
     def k0(self):
-        return 2 * np.pi / self.wavelength  # defines the units for the simulation!
+        return 2 * np.pi / self.wavelength
 
     @property
     def mat(self) -> Union[sp.spmatrix, Tuple[np.ndarray, np.ndarray]]:
@@ -117,17 +121,23 @@ class FDFD(SimGrid):
         mat = self.ddz - self.k0 ** 2 * sp.diags(self.eps_t[2].flatten())
         return mat
 
-    def opt_solver(self, src: np.ndarray, transform_fn: Optional[Callable] = None) -> Callable:
-        """Initialize the optimization problem solver given two callable functions:
+    def opt_solver(self, src: np.ndarray, wavelength: float, transform_fn: Optional[Callable] = None) -> Callable:
+        """
+
+        Initialize the optimization problem solver given two callable functions:
 
         1. A numpy array source :code:`src`
         2. The JAX-transformable transform function :code:`transform_fn` (e.g. transform) (identity if None)
 
         Args:
+            src: source for the solver
+            wavelength: Wavelength corresponding to src
             transform_fn: Transforms parameters to yield the epsilon function used by jax
 
         Returns:
             A solve function (2d or 3d based on defined :code:`ndim` specified for the instance of :code:`FDFD`)
+
+        Returns:
 
         """
 
@@ -135,7 +145,7 @@ class FDFD(SimGrid):
             def transform_fn(x):
                 return x
         src = jnp.ravel(jnp.array(src))
-        k0 = self.k0
+        k0 = 2 * np.pi / wavelength
 
         if self.ndim == 2:
             ddz: sp.coo_matrix = self.ddz.tocoo()
@@ -164,52 +174,84 @@ class FDFD(SimGrid):
 
             return solve_3d
 
-    def opt_run(self, src: np.ndarray, obj_fn: Optional[Callable], rho_init: np.ndarray, num_iters: int,
-                transform_fn: Optional[Callable] = None, update_eps: int = 0, pbar: Optional[Callable] = None,
-                step_size: float = 1):
+    def opt_run(self, src: np.ndarray, wavelength: Union[float, List[float]],
+                obj_fn: Optional[Callable], rho_init: np.ndarray, num_iters: int,
+                transform_fn: Optional[Callable] = None,
+                pbar: Optional[Callable] = None,
+                step_size: float = 1, viz_interval: int = 0,
+                viz_pipes: Optional[List[Pipe]] = None, record_viz: bool = True) -> Tuple[np.ndarray, jnp.ndarray]:
         """Run the optimization
 
             Args:
-                src: A numpy array source
-                obj_fn: The JAX-transformable objective function
-                    that takes in output of solve_fn from :code:`opt_solver`.
+                src: A numpy array source or tuple of sources (if :code:`None`, obj_fn acts on params directly)
+                wavelength: Wavelength(s) corresponding to src
+                obj_fn: The JAX-transformable objective function (or tuple of such functions)
+                    corresponding to src that takes in output of solve_fn from :code:`opt_solver`.
                 rho_init: Initial parameters for the optimizer (:code:`eps` if :code:`None`)
                 num_iters: number of iterations to run
                 transform_fn: The JAX-transformable transform function to yield epsilon (identity if None)
-                update_eps: iteration interval over which to update :code:`eps` based on :code:`p`
-                    (default 0, no update until end).
                 step_size: For the Adam update, specify the step size needed.
+                viz_interval: The optimization intermediate results are recorded every :code:`record_interval` steps
+                    (default of 0 means do not record)
+                viz_pipes: Pipes for visualizing the auxiliary data in the simulation
+                record_viz: Record the visualization
 
             Returns:
                 A tuple of the final eps distribution (:code:`transform_fn(p)`) and parameters :code:`p`
 
         """
-        solve_fn = self.opt_solver(src, transform_fn)
 
         opt_init, opt_update, get_params = adam(step_size=step_size)
         opt_state = opt_init(rho_init)
 
-        def obj_fn_p(p: jnp.ndarray):
-            return obj_fn(solve_fn(p))
+        src = (src,) if not isinstance(src, tuple) and not isinstance(src, list) else src
+        wavelength = (wavelength,) if not isinstance(wavelength, tuple) and not isinstance(wavelength, list) else wavelength
+        obj_fn = (obj_fn,) if not isinstance(obj_fn, tuple) and not isinstance(obj_fn, list) else obj_fn
+        if not len(src) == len(obj_fn):
+            raise ValueError("Must have same number of src and obj_fn to optimize")
+        if viz_pipes is not None:
+            if not len(viz_pipes) == len(src):
+                raise ValueError("Number of viz_pipes must match number of src, obj_fn")
+
+        # Define the objective function acting on parameters rho
+        solve_fn = [None if s is None else self.opt_solver(s, w, transform_fn) for s, w in zip(src, wavelength)]
+
+        def overall_obj_fn(rho: jnp.ndarray):
+            evals = [o(s(rho)) if s is not None else o(rho) for o, s in zip(obj_fn, solve_fn)]
+            return jnp.array([obj for obj, _ in evals]).sum(), [aux for _, aux in evals]
 
         # Define a compiled update step
         def step_(i, opt_state):
-            v, g = jax.value_and_grad(obj_fn_p)(get_params(opt_state))
-            return v, opt_update(i, g, opt_state)
+            vaux, g = jax.value_and_grad(overall_obj_fn, has_aux=True)(get_params(opt_state))
+            v, aux = vaux
+            return v, opt_update(i, g, opt_state), aux
+
+        def _update_eps(state):
+            rho = get_params(state)
+            self.eps = np.asarray(rho if transform_fn is None else transform_fn(rho))
 
         step = jax.jit(step_, backend='cpu' if self.ndim == 2 else 'gpu')
 
         iterator = pbar(range(num_iters)) if pbar is not None else range(num_iters)
 
+        losses = []
+
         for i in iterator:
-            v, opt_state = step(i, opt_state)
-            if update_eps > 0 and i % update_eps == 0:
-                rho = get_params(opt_state)
-                self.eps = rho if transform_fn is None else transform_fn(rho)
+            v, opt_state, fields = step(i, opt_state)
+            if viz_interval > 0 and i % viz_interval == 0:
+                _update_eps(opt_state)
+                if viz_pipes is not None:
+                    for e, pipes in zip(fields, viz_pipes):
+                        eps_pipe, field_pipe, power_pipe = pipes
+                        eps_pipe.send((self.eps.T - np.min(self.eps)) / (np.max(self.eps) - np.min(self.eps)))
+                        ez = np.reshape(np.asarray(e), self.shape).squeeze().T
+                        power = np.abs(ez) ** 2
+                        field_pipe.send(ez.real / np.max(ez.real))
+                        power_pipe.send(power / np.max(power))
             iterator.set_description(f"𝓛: {v:.5f}")
-        rho = get_params(opt_state)
-        self.eps = rho if transform_fn is None else transform_fn(rho)
-        return np.asarray(self.eps), np.asarray(rho)
+            losses.append(v)
+        _update_eps(opt_state)
+        return np.asarray(losses), get_params(opt_state)
 
     Az = matz
 
@@ -415,7 +457,7 @@ class FDFD(SimGrid):
 
         return _scpml(pe), _scpml(ph)
 
-    def effective_fdfd2d(self, x: Union[Shape2, Dim2], y: Union[Shape2, Dim2]):
+    def effective_fdfd2d(self, x: Union[Shape2, Dim2], y: Union[Shape2, Dim2], pml: Optional[Union[Shape, Dim]] = None):
         # get slab index
         if not self.ndim == 3:
             raise RuntimeError("Require ndim = 3 for 2d variational effective index method.")
@@ -432,7 +474,7 @@ class FDFD(SimGrid):
         fdfd = FDFD(
             shape=eps_effective.shape,
             spacing=self.spacing[:2],
-            eps=eps_effective,
+            eps=eps_effective.real,
             pml=self.pml_shape[:2]
         )
         if not isinstance(x, tuple):
@@ -466,3 +508,30 @@ class FDFD(SimGrid):
         ddz = -db[0] @ df[0] - db[1] @ df[1]
         ddz.sort_indices()  # for the solver
         return ddz
+
+    def viz_panel(self, num_sims: int = 1, width: float = 700):
+        if self.ndim == 2:
+            dmaps = []
+            pipes = []
+            for sim in range(num_sims):
+                extent = get_extent_2d(self.shape, self.spacing[0])
+                aspect = (extent[1] - extent[0]) / (extent[3] - extent[2])
+                bounds = (extent[0], extent[2], extent[1], extent[3])
+                eps_norm = self.eps.T / np.max(self.eps.T)
+                bounded_img = lambda data: hv.Image(data, bounds=bounds)
+                eps_pipe = Pipe(data=[])
+                eps_dmap = hv.DynamicMap(bounded_img, streams=[eps_pipe])
+                field_pipe = Pipe(data=[])
+                field_dmap = hv.DynamicMap(bounded_img, streams=[field_pipe])
+                power_pipe = Pipe(data=[])
+                power_dmap = hv.DynamicMap(bounded_img, streams=[power_pipe])
+                eps_pipe.send(eps_norm)
+                field_pipe.send(np.zeros_like(eps_norm))
+                power_pipe.send(np.zeros_like(eps_norm))
+                dmaps.append((eps_dmap.opts(alpha=0.2, width=width, height=int(width / aspect), cmap='gray'),
+                              field_dmap.opts(cmap='RdBu', width=width, height=int(width / aspect)),
+                              power_dmap.opts(cmap='hot', width=width, height=int(width / aspect))))
+                pipes.append((eps_pipe, field_pipe, power_pipe))
+            return pn.Column(*[pn.Row(fd * ed, pd * ed) for ed, fd, pd in dmaps]), pipes
+        else:
+            return NotImplementedError("Only implemented for ndim=2!")

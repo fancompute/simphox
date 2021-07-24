@@ -79,7 +79,7 @@ class Grid:
         b = component.bounds
         return b[0] >= 0 and b[1] >= 0 and b[2] <= self.size[0] and b[3] <= self.size[1]
 
-    def fill(self, zmax: float, eps: float):
+    def fill(self, zmax: float, eps: float) -> "Grid":
         """Fill grid up to `zmax`, typically used for substrate + cladding epsilon settings
 
         Args:
@@ -90,8 +90,9 @@ class Grid:
 
         """
         self.eps[..., :int(zmax / self.spacing[-1])] = eps
+        return self
 
-    def add(self, component: Component, eps: float, zmin: float = None, thickness: float = None):
+    def add(self, component: Component, eps: float, zmin: float = None, thickness: float = None) -> "Grid":
         """Add a component to the grid
 
         Args:
@@ -112,6 +113,7 @@ class Grid:
         else:
             zidx = (int(zmin / self.spacing[0]), int((zmin + thickness) / self.spacing[1]))
             self.eps[mask == 1, zidx[0]:zidx[1]] = eps
+        return self
 
     def reshape(self, v: np.ndarray) -> np.ndarray:
         """A simple method to reshape flat 3d vec array into the grid shape

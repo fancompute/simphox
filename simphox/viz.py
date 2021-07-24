@@ -1,24 +1,21 @@
 import k3d
 import numpy as np
 from typing import Tuple, Optional
+import holoviews as hv
 
 from matplotlib import colors as mcolors
 
 
-def get_extent_2d(ax, shape, spacing: Optional[float] = None):
+def get_extent_2d(shape, spacing: Optional[float] = None):
     """
 
     Args:
-        ax: Matplotlib axis handle
         shape: shape of the elements to plot
         spacing: spacing between grid points (assumed to be isotropic)
 
     Returns:
 
     """
-    if spacing:  # in microns!
-        ax.set_ylabel(r'$y$ ($\mu$m)')
-        ax.set_xlabel(r'$x$ ($\mu$m)')
     return (0, shape[0] * spacing, 0, shape[1] * spacing) if spacing else (0, shape[0], 0, shape[1])
 
 
@@ -34,7 +31,10 @@ def plot_eps_2d(ax, eps: np.ndarray, spacing: Optional[float] = None, cmap: str 
     Returns:
 
     """
-    extent = get_extent_2d(ax, eps.shape, spacing)
+    extent = get_extent_2d(eps.shape, spacing)
+    if spacing:  # in microns!
+        ax.set_ylabel(r'$y$ ($\mu$m)')
+        ax.set_xlabel(r'$x$ ($\mu$m)')
     ax.imshow(eps.T, cmap=cmap, origin='lower', alpha=1, extent=extent)
 
 
@@ -54,12 +54,25 @@ def plot_field_2d(ax, field: np.ndarray, eps: Optional[np.ndarray] = None, spaci
     Returns:
 
     """
-    extent = get_extent_2d(ax, field.shape, spacing)
+    extent = get_extent_2d(field.shape, spacing)
+    if spacing:  # in microns!
+        ax.set_ylabel(r'$y$ ($\mu$m)')
+        ax.set_xlabel(r'$x$ ($\mu$m)')
     if eps is not None:
         plot_eps_2d(ax, eps, spacing, mat_cmap)
     im_val = field * np.sign(field.flat[np.abs(field).argmax()])
     norm = mcolors.DivergingNorm(vcenter=0, vmin=-im_val.max(), vmax=im_val.max())
     ax.imshow(im_val.T, cmap=cmap, origin='lower', alpha=alpha, extent=extent, norm=norm)
+
+
+def hv_field_2d(field: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Optional[float] = None,
+                cmap: str = 'RdBu', mat_cmap: str = 'gray', alpha: float = 0.2):
+    extent = get_extent_2d(field.shape, spacing)
+    bounds = (extent[0], extent[2], extent[1], extent[3])
+    aspect = (extent[3] - extent[2]) / (extent[1] - extent[0])
+    field_img = hv.Image(field / np.max(field), bounds=bounds).opts(cmap=cmap, aspect=aspect)
+    eps_img = hv.Image(eps / np.max(eps), bounds=bounds).opts(cmap=mat_cmap, alpha=alpha, aspect=aspect)
+    return field_img * eps_img
 
 
 def plot_power_2d(ax, power: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Optional[float] = None,
@@ -78,7 +91,10 @@ def plot_power_2d(ax, power: np.ndarray, eps: Optional[np.ndarray] = None, spaci
     Returns:
 
     """
-    extent = get_extent_2d(ax, power.shape, spacing)
+    extent = get_extent_2d(power.shape, spacing)
+    if spacing:  # in microns!
+        ax.set_ylabel(r'$y$ ($\mu$m)')
+        ax.set_xlabel(r'$x$ ($\mu$m)')
     if eps is not None:
         plot_eps_2d(ax, eps, spacing, mat_cmap)
     ax.imshow(power.T, cmap=cmap, origin='lower', alpha=alpha, extent=extent)
