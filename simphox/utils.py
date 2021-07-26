@@ -3,7 +3,7 @@ import scipy.sparse as sp
 import jax.ops
 import jax.numpy as jnp
 from jax.scipy.signal import convolve as conv
-from skimage.draw import circle
+from skimage.draw import disk
 from typing import Tuple, Union, Optional
 from copy import deepcopy
 
@@ -193,7 +193,7 @@ def pml_params(pos: np.ndarray, t: int, exp_scale: float, log_reflection: float,
 
 def smooth_rho_2d_fn(eta: float, beta: float, radius: float):
     def smooth_rho(rho: jnp.ndarray):
-        rr, cc = circle(radius, radius, radius + 1)
+        rr, cc = disk((radius, radius), radius + 1)
         kernel = np.zeros((2 * radius + 1, 2 * radius + 1), dtype=np.float)
         kernel[rr, cc] = 1
         kernel = kernel / kernel.sum()
@@ -246,9 +246,11 @@ def place_rho_2d_fn_temp(rho_init: jnp.ndarray, box: Box, ud_symmetry: bool = Fa
 
     if ud_symmetry and lr_symmetry:
         def place_rho(rho):
-            rho_sym = rho[:shape[0] // 2, :shape[1] // 2]
-            rho = jnp.hstack((rho_sym, jnp.fliplr(rho_sym)))
-            rho = jnp.vstack((rho, jnp.flipud(rho)))
+            x, y = shape[0] // 2, shape[1] // 2
+            rho_sym = rho[:x, :y]
+            rho = rho.at[-x:, :y].set(rho_sym[::-1, :])
+            rho = rho.at[-x:, -y:].set(rho_sym[::-1, ::-1])
+            rho = rho.at[:x, -y:].set(rho_sym[:, ::-1])
             return jnp.array(rho_init) * (1 - mask) + rho * mask
     elif ud_symmetry:
         def place_rho(rho):

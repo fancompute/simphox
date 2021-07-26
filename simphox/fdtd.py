@@ -49,8 +49,8 @@ class FDTD(SimGrid):
             gpu: use the GPU to accelerate the computation
     """
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
-                 pml: Optional[Union[Shape, Dim]] = None, use_jax: bool = False):
-        super(FDTD, self).__init__(shape, spacing, eps, pml=pml)
+                 pml: Optional[Union[Shape, Dim]] = None, use_jax: bool = False, name: str = 'fdtd'):
+        super(FDTD, self).__init__(shape, spacing, eps, pml=pml, name=name)
         self.dt = 1 / np.sqrt(np.sum(1 / self.spacing ** 2))  # includes courant condition!
 
         # pml (internal to the grid, so specified here!)

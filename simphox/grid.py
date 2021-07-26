@@ -4,8 +4,9 @@ import jax.numpy as jnp
 import numpy as np
 import scipy.sparse as sp
 
-from .component import Component, Callable
-from .typing import Shape, Dim, GridSpacing, Optional, List, Union
+from dphox.component import Pattern, Callable, Port
+
+from .typing import Shape, Dim, GridSpacing, Optional, List, Union, Dict
 from .utils import curl_fn, yee_avg
 
 
@@ -37,43 +38,9 @@ class Grid:
         self.pos = [np.hstack((0, np.cumsum(dx))) if dx.size > 1 else None for dx in self.cell_sizes]
         self.components = []
 
-    @classmethod
-    def from_2d_component(cls, comp: Component, comp_eps: float, sub_eps: float, spacing: float, boundary: Dim,
-                          comp_t: float = 0, comp_z: Optional[float] = None, rib_t: float = 0,
-                          sub_z: float = 0, height: float = 0, bg_eps: float = 1):
-        """
-
-        Args:
-            comp: 2d component
-            comp_eps: component epsilon
-            sub_eps: substrate epsilon
-            spacing: spacing required
-            boundary: boundary size around component
-            height: height for 3d simulation
-            sub_z: substrate minimum height
-            comp_z: component height (defaults to substrate_z)
-            comp_t: component thickness
-            rib_t: rib thickness for component (partial etch)
-            bg_eps: background epsilon (usually 1 or air)
-
-        Returns:
-            A Grid object for the component
-
-        """
-        b = comp.size
-        x = b[0] + 2 * boundary[0]
-        y = b[1] + 2 * boundary[1]
-        comp_z = sub_z if comp_z is None else comp_z
-        spacing = spacing * np.ones(2 + (comp_t > 0)) if isinstance(spacing, float) else np.asarray(spacing)
-        if height > 0:
-            shape = (np.asarray((x, y, height)) / spacing).astype(np.int)
-        else:
-            shape = (np.asarray((x, y)) / spacing).astype(np.int)
-        grid = cls(shape, spacing, eps=bg_eps)
-        grid.fill(comp_eps, comp_z + rib_t)
-        grid.fill(sub_eps, sub_z)
-        grid.add(comp, comp_eps, comp_z, comp_t)
-        return grid
+        # used to handle special functions of waveguide-based components
+        self.port: Dict[str, Port] = {}
+        self.port_w = None
 
     def _check_bounds(self, component) -> bool:
         b = component.bounds
@@ -87,12 +54,14 @@ class Grid:
             eps: Relative eps to fill
 
         Returns:
+            The modified FDFD object (:code:`self`)
 
         """
-        self.eps[..., :int(zmax / self.spacing[-1])] = eps
+        if zmax > 0:
+            self.eps[..., :int(zmax / self.spacing[-1])] = eps
         return self
 
-    def add(self, component: Component, eps: float, zmin: float = None, thickness: float = None) -> "Grid":
+    def add(self, component: Pattern, eps: float, zmin: float = None, thickness: float = None) -> "Grid":
         """Add a component to the grid
 
         Args:
@@ -102,6 +71,7 @@ class Grid:
             thickness: component thickness (`zmax = zmin + thickness`)
 
         Returns:
+            The modified FDFD object (:code:`self`)
 
         """
         if not self._check_bounds(component):
@@ -113,6 +83,8 @@ class Grid:
         else:
             zidx = (int(zmin / self.spacing[0]), int((zmin + thickness) / self.spacing[1]))
             self.eps[mask == 1, zidx[0]:zidx[1]] = eps
+        self.port = component.port
+        self.port_w = component.config.get('waveguide_w', None)
         return self
 
     def reshape(self, v: np.ndarray) -> np.ndarray:
@@ -131,7 +103,7 @@ class Grid:
 class SimGrid(Grid):
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
                  bloch_phase: Union[Dim, float] = 0.0, pml: Optional[Union[int, Shape, Dim]] = None,
-                 pml_eps: float = 1.0, yee_avg: int = 1):
+                 pml_eps: float = 1.0, yee_avg: int = 1, name: str = 'simgrid'):
         """The base :code:`SimGrid` class (adding things to :code:`Grid` like Yee grid support, Bloch phase,
         PML shape, etc.).
 
@@ -149,6 +121,7 @@ class SimGrid(Grid):
         self.pml_shape = np.ones(self.ndim, dtype=np.int) * pml if isinstance(pml, int) else pml
         self.pml_eps = pml_eps
         self.yee_avg = yee_avg
+        self.name = name
         self.field_shape = np.hstack((3, self.shape))
         if self.pml_shape is not None:
             if np.any(self.pml_shape <= 3) or np.any(self.pml_shape >= self.shape // 2):
@@ -204,7 +177,7 @@ class SimGrid(Grid):
     def db(self):
         return self.deriv(back=True)
 
-    def _diff_fn(self, use_h: bool = False, use_jax: bool = False):
+    def diff_fn(self, use_h: bool = False, use_jax: bool = False):
         xp = jnp if use_jax else np
         dx = jnp.array(self._dxes[use_h]) if use_jax else self._dxes[use_h]
         if use_h:
@@ -226,7 +199,7 @@ class SimGrid(Grid):
             The discretized curl :math:`\\nabla \times \mathbf{E}`
 
         """
-        return curl_fn(self._diff_fn(use_h=False, use_jax=use_jax), use_jax=use_jax, beta=beta)
+        return curl_fn(self.diff_fn(use_h=False, use_jax=use_jax), use_jax=use_jax, beta=beta)
 
     def curl_h(self, beta: Optional[float] = None, use_jax: bool = False) -> Callable[[np.ndarray], np.ndarray]:
         """Get the curl of the magnetic field :math:`\mathbf{H}`
@@ -239,7 +212,24 @@ class SimGrid(Grid):
                The discretized curl :math:`\\nabla \times \mathbf{H}`
 
         """
-        return curl_fn(self._diff_fn(use_h=True, use_jax=use_jax), use_jax=use_jax, beta=beta)
+        return curl_fn(self.diff_fn(use_h=True, use_jax=use_jax), use_jax=use_jax, beta=beta)
+
+    def pml_safe_placement(self, x: float, y: float, safe_threshold: float = 0.1):
+        """ Specifies a new x and y that are safe from the PML region / esge of the simulation.
+
+        Args:
+            x: Input x location
+            y: Input y location
+
+        Returns:
+            New x, y tuple that is safe from PML.
+
+        """
+        pml = self.pml_shape * self.spacing + safe_threshold
+        maxx, maxy = self.size[:2]
+        new_x = min(max(x, pml[0]), maxx - pml[0])
+        new_y = min(max(y, pml[1]), maxy - pml[1])
+        return new_x, new_y
 
     @property
     @lru_cache()

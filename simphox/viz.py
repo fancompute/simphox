@@ -1,7 +1,12 @@
 import k3d
 import numpy as np
-from typing import Tuple, Optional
+from typing import Union, Dict
+
+from .typing import Tuple, Optional, List
 import holoviews as hv
+from holoviews.streams import Pipe
+import panel as pn
+import xarray
 
 from matplotlib import colors as mcolors
 
@@ -240,3 +245,19 @@ def plot_eps_3d(plot: k3d.Plot, eps: Optional[np.ndarray] = None, spacing: float
     bounds = [0, eps.shape[0] * spacing, 0, eps.shape[1] * spacing, 0, eps.shape[2] * spacing]
     eps_volume.transform.bounds = bounds
     plot += eps_volume
+
+
+def scalar_metrics_viz(metric_config: Dict[str, List[str]]):
+    metrics_pipe = {title: Pipe(data=xarray.DataArray(
+        data=np.asarray([[] for _ in metric_config[title]]),
+        coords={
+            'metric': metric_config[title],
+            'iteration': np.arange(0)
+        },
+        dims=['metric', 'iteration'],
+        name=title
+    )) for title in metric_config}
+    metrics_dmaps = [hv.DynamicMap(lambda data: hv.Dataset(data).to(hv.Curve, kdims=['iteration']).overlay('metric'),
+        streams=[metrics_pipe[title]]).opts(xlabel='Iteration', shared_axes=False, framewise=True, title=title)
+                     for title in metric_config]
+    return pn.Row(*metrics_dmaps), metrics_pipe

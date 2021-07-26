@@ -1,7 +1,7 @@
-from typing import Tuple, Callable
-
 from .fdfd import FDFD
 from .grid import SimGrid
+from .typing import Tuple, Callable, Union, Optional
+from .utils import match_mode_2d
 
 import numpy as np
 import scipy.sparse as sp
@@ -15,12 +15,12 @@ except ImportError:
 from .typing import Dim
 
 
-def xs_profile(grid: SimGrid, center: Tuple[float, ...], size: Tuple[float, ...],
+def xs_profile(grid: SimGrid, center: Union[float, Tuple[float, ...]], size: Union[float, Tuple[float, ...]],
                axis: int = 0, wavelength: float = 1.55, mode_idx: int = 0, sparse: bool = True):
-    """
+    """Cross section profile of a 2d or 3d :code:`SimGrid` object.
 
     Args:
-        grid: simulation grid (e.g., :code:`FDFD`, :code:`FDTD`, :code:`BPM`)
+        grid: simulation grid (e.g., :code:`FDFD`, :code:`FDTD`, :code:`BPM`, which are all :code:`SimGrid`)
         center: center tuple of the form :code:`(x, y, z)` (in sim units, NOT pixels)
         size: size of the source (in sim units, NOT pixels)
         axis: axis for normal vector of cross-section (one of :code:`(0, 1, 2)`)
@@ -202,3 +202,49 @@ def gaussian_source_fn(profiles: np.ndarray, pulse_width: float, center_waveleng
     """
     src = gaussian_source(profiles, pulse_width, center_wavelength, dt, t0, linear_chirp)
     return lambda tt: src[tt // dt]
+
+
+def eigenmode_source_average(field: np.ndarray, grid: FDFD, center: Tuple[float, ...], size: Tuple[float, ...],
+                             displacement: float, axis: int = 0, mode_idx: int = 0):
+    """
+
+        Args:
+
+            grid: simulation grid (e.g., :code:`FDFD`, :code:`FDTD`, :code:`BPM`)
+            center: center tuple of the form :code:`(x, y, z)` (in sim units, NOT pixels)
+            size: size of the source (in sim units, NOT pixels)
+            axis: axis for normal vector of cross-section (one of :code:`(0, 1, 2)`)
+            mode_idx: mode index for the eigenmode for source profile
+        """
+    src = xs_profile(grid, center, size, axis, grid.wavelength, mode_idx, sparse=False)
+    average = field * np.sum([np.roll(src, d, axis)
+                              for d in range(int(displacement // grid.spacing) + 1)])
+    return average
+
+
+def port_sources(grid: SimGrid, src_w: Optional[float] = None):
+    if grid.ndim == 3:
+        raise NotImplementedError("Only implemented for ndim == 2 at the moment.")
+
+    src_w = 2 * grid.port_w if src_w is None else src_w
+    return {
+        name: xs_profile(grid=grid,
+                         center=grid.pml_safe_placement(p.x, p.y),
+                         size=src_w,
+                         axis=int(np.mod(p.a, np.pi) == np.pi / 2),
+                         sparse=False)
+        for name, p in grid.port.items()
+    }
+
+
+def port_powers(field: np.ndarray, grid: SimGrid, displacement: float = 0, src_w: Optional[float] = None):
+    sources = port_sources(grid, src_w)
+
+    powers = {}
+    for port_name, source in sources.items():
+        sign = -1 if grid.port[port_name].a >= np.pi else 1
+        axis = int(np.mod(grid.port[port_name].a, np.pi) == np.pi / 2)
+        roll_d = int(displacement // grid.spacing[1 - axis])
+        powers[port_name] = np.abs(match_mode_2d(np.roll(source, roll_d * sign, axis))(field)[0]) ** 2
+
+    return powers
