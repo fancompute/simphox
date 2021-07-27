@@ -2,6 +2,8 @@ import k3d
 import numpy as np
 from typing import Union, Dict
 
+from holoviews import opts
+
 from .typing import Tuple, Optional, List
 import holoviews as hv
 from holoviews.streams import Pipe
@@ -257,7 +259,9 @@ def scalar_metrics_viz(metric_config: Dict[str, List[str]]):
         dims=['metric', 'iteration'],
         name=title
     )) for title in metric_config}
-    metrics_dmaps = [hv.DynamicMap(lambda data: hv.Dataset(data).to(hv.Curve, kdims=['iteration']).overlay('metric'),
-        streams=[metrics_pipe[title]]).opts(xlabel='Iteration', shared_axes=False, framewise=True, title=title)
-                     for title in metric_config]
+    metrics_dmaps = [
+        hv.DynamicMap(lambda data: hv.Dataset(data).to(hv.Curve, kdims=['iteration']).overlay('metric'),
+                      streams=[metrics_pipe[title]]).opts(opts.Curve(framewise=True, shared_axes=False, title=title))
+        for title in metric_config
+    ]
     return pn.Row(*metrics_dmaps), metrics_pipe

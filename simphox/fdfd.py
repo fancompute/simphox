@@ -443,13 +443,13 @@ class FDFD(SimGrid):
             raise NotImplementedError("Only implemented for ndim == 2!")
 
     @classmethod
-    def from_pattern(cls, component: Pattern, core_eps: float, clad_eps: float, spacing: float, boundary: Dim,
+    def from_pattern(cls, component: "Pattern", core_eps: float, clad_eps: float, spacing: float, boundary: Dim,
                      pml: float, wavelength: float, component_t: float = 0, component_zmin: Optional[float] = None,
                      rib_t: float = 0, sub_z: float = 0, height: float = 0, bg_eps: float = 1, name: str = 'fdfd'):
         """Initialize an FDFD from a Pattern defined in DPhox.
 
         Args:
-            component: 2d component
+            component: component provided by DPhox
             core_eps: core epsilon (in the pattern region_
             clad_eps: clad epsilon
             spacing: spacing required

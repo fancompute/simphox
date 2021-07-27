@@ -24,12 +24,14 @@ class OptProblem:
     """An optimization problem
 
     An optimization problem consists of a neural network defined at least by input parameters :code:`rho`,
-    the transform function :code:`T(rho)` (default identity),
-    and objective function :code:`C(T(rho))`, which maps to a scalar.
+    the transform function :code:`T(rho)` (:math:`T(\\rho(x, y))`) (default identity),
+    and objective function :code:`C(T(rho))` (:math:`C(T(\\rho(x, y)))`), which maps to a scalar.
     For use with an inverse design problem (the primary use case in this module), the user can include an
     FDFD simulation and a source (to be fed into the FDFD solver). The FDFD simulation and source are then
-    used to define a function :code:`S(eps) == S(T(rho))` that solves the FDFD problem where `eps == T(rho)`,
-    in which case the objective function evaluates :code:`C(S(T(rho)))`.
+    used to define a function :code:`S(eps) == S(T(rho))` that solves the FDFD problem
+    where `eps == T(rho)` (:math:`\epsilon(x, y)) := T(\\rho(x, y))`),
+    in which case the objective function evaluates :code:`C(S(T(rho)))`
+    (:math:`\epsilon(x, y)) := C(S(T((\\rho(x, y))))`).
 
     Args:
         transform_fn: The JAX-transformable transform function to yield epsilon (identity if None,
@@ -79,10 +81,30 @@ class OptViz:
     metrics_pipes: Optional[Dict[str, Dict[str, Pipe]]] = None
 
 
+@dataclasses.dataclass
+class OptRecord:
+    """An optimization record
+
+        We need an object to hold the history, which includes a list of costs (we avoid the term loss
+        as it may be related to  denoted
+
+        Args:
+            costs: List of costs
+            params: Params (:math:`\rho`) transformed into the design
+            metrics: An xarray with dimensions :code:`name`, :code:`metric`, :code:`iteration`
+            eps: An xarray with dimensions :code:`name`, :code:`x`, :code:`y`
+
+    """
+    costs: np.ndarray
+    params: jnp.ndarray
+    metrics: xarray.DataArray
+    eps: xarray.DataArray
+
+
 def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.ndarray, num_iters: int,
             pbar: Optional[Callable] = None, step_size: float = 1, viz_interval: int = 0, metric_interval: int = 0,
             viz: Optional[OptViz] = None, backend: str = 'cpu',
-            record_param_interval: int = 0) -> Tuple[np.ndarray, jnp.ndarray, Dict[str, list]]:
+            eps_interval: int = 0) -> OptRecord:
     """Run the optimization, which can be done over multipe simulations as long as those simulations
     share the same set of params initialized by :code:`init_params`.
 
@@ -101,7 +123,7 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
              are recorded in a given :code:`OptProblem` (default of 0 means do not record anything).
             viz: The :code:`OptViz` object required for visualizing the optimization in real time.
             backend: Recommended backend for :code:`ndim == 2` is :code:`'cpu'` and :code:`ndim == 3` is :code:`'gpu'`
-            record_param_interval: Whether to record the parameter metric at the specified :code:`record_interval`.
+            eps_interval: Whether to record the parameter metric at the specified :code:`record_interval`.
                 Beware, this can use up a lot of memory so use judiciously.
 
         Returns:
@@ -179,7 +201,7 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
                             name=title
                         )
                     )
-        if record_param_interval > 0 and i % record_param_interval == 0:
+        if eps_interval > 0 and i % eps_interval == 0:
             for sop in sim_opt_problems:
                 history[f'eps/{sop.fdfd.name}'].append((i, sop.fdfd.eps))
         iterator.set_description(f"𝓛: {v:.5f}")
@@ -187,7 +209,32 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
         if viz.costs_pipe is not None:
             viz.costs_pipe.send(np.asarray(costs))
     _update_eps(opt_state)
-    return np.asarray(costs), get_params(opt_state), dict(history)
+
+    all_metric_names = sum([metric_names for _, metric_names in viz.metric_config.items()], [])
+    metrics = xarray.DataArray(
+        data=np.asarray([[history[f'{metric_name}/{sop.fdfd.name}']
+                         for metric_name in all_metric_names] for sop in sim_opt_problems]),
+        coords={
+            'name': [sop.fdfd.name for sop in sim_opt_problems],
+            'metric': all_metric_names,
+            'iteration': np.arange(num_iters)
+        },
+        dims=['name', 'metric', 'iteration'],
+        name='metrics'
+    ) if sim_opt_problems else []
+    eps = xarray.DataArray(
+        data=np.asarray([[eps for _, eps in history[f'eps/{sop.fdfd.name}']] if eps_interval > 0 else []
+                         for sop in sim_opt_problems]),
+        coords={
+            'name': [sop.fdfd.name for sop in sim_opt_problems],
+            'iteration': [it for it, _ in history[f'eps/{sim_opt_problems[0].fdfd.name}']],
+            'x': np.arange(sim_opt_problems[0].fdfd.shape[0]),
+            'y': np.arange(sim_opt_problems[0].fdfd.shape[1]),
+        },
+        dims=['name', 'iteration', 'x', 'y'],
+        name='eps'
+    ) if sim_opt_problems else []
+    return OptRecord(costs=np.asarray(costs), params=get_params(opt_state), metrics=metrics, eps=eps)
 
 
 def opt_viz(opt_problem: Union[OptProblem, List[OptProblem]], metric_config: Dict[str, List[str]]) -> OptViz:
