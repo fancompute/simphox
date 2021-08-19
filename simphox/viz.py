@@ -2,13 +2,18 @@ import k3d
 import numpy as np
 from typing import Union, Dict
 
-from holoviews import opts
-
-from .typing import Tuple, Optional, List
-import holoviews as hv
-from holoviews.streams import Pipe
-import panel as pn
 import xarray
+from .typing import Tuple, Optional, List
+
+try:
+    HOLOVIEWS_IMPORTED = True
+    import holoviews as hv
+    from holoviews.streams import Pipe
+    from holoviews import opts
+    import panel as pn
+except ImportError:
+    HOLOVIEWS_IMPORTED = False
+
 
 from matplotlib import colors as mcolors
 
@@ -74,11 +79,11 @@ def plot_field_2d(ax, field: np.ndarray, eps: Optional[np.ndarray] = None, spaci
 
 def hv_field_2d(field: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Optional[float] = None,
                 cmap: str = 'RdBu', mat_cmap: str = 'gray', alpha: float = 0.2):
-    extent = get_extent_2d(field.shape, spacing)
+    extent = get_extent_2d(field.T.shape, spacing)
     bounds = (extent[0], extent[2], extent[1], extent[3])
     aspect = (extent[3] - extent[2]) / (extent[1] - extent[0])
-    field_img = hv.Image(field / np.max(field), bounds=bounds).opts(cmap=cmap, aspect=aspect)
-    eps_img = hv.Image(eps / np.max(eps), bounds=bounds).opts(cmap=mat_cmap, alpha=alpha, aspect=aspect)
+    field_img = hv.Image(field.T.squeeze().real / np.max(field), bounds=bounds).opts(cmap=cmap, aspect=aspect)
+    eps_img = hv.Image(eps.T / np.max(eps), bounds=bounds).opts(cmap=mat_cmap, alpha=alpha, aspect=aspect)
     return field_img * eps_img
 
 
@@ -250,18 +255,21 @@ def plot_eps_3d(plot: k3d.Plot, eps: Optional[np.ndarray] = None, spacing: float
 
 
 def scalar_metrics_viz(metric_config: Dict[str, List[str]]):
-    metrics_pipe = {title: Pipe(data=xarray.DataArray(
-        data=np.asarray([[] for _ in metric_config[title]]),
-        coords={
-            'metric': metric_config[title],
-            'iteration': np.arange(0)
-        },
-        dims=['metric', 'iteration'],
-        name=title
-    )) for title in metric_config}
-    metrics_dmaps = [
-        hv.DynamicMap(lambda data: hv.Dataset(data).to(hv.Curve, kdims=['iteration']).overlay('metric'),
-                      streams=[metrics_pipe[title]]).opts(opts.Curve(framewise=True, shared_axes=False, title=title))
-        for title in metric_config
-    ]
-    return pn.Row(*metrics_dmaps), metrics_pipe
+    if HOLOVIEWS_IMPORTED:
+        metrics_pipe = {title: Pipe(data=xarray.DataArray(
+            data=np.asarray([[] for _ in metric_config[title]]),
+            coords={
+                'metric': metric_config[title],
+                'iteration': np.arange(0)
+            },
+            dims=['metric', 'iteration'],
+            name=title
+        )) for title in metric_config}
+        metrics_dmaps = [
+            hv.DynamicMap(lambda data: hv.Dataset(data).to(hv.Curve, kdims=['iteration']).overlay('metric'),
+                          streams=[metrics_pipe[title]]).opts(opts.Curve(framewise=True, shared_axes=False, title=title))
+            for title in metric_config
+        ]
+        return pn.Row(*metrics_dmaps), metrics_pipe
+    else:
+        raise ImportError("Holoviews not imported, cannot visualize")

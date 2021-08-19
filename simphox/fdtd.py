@@ -3,13 +3,13 @@ from functools import lru_cache
 import numpy as np
 from typing import Tuple, List, Callable
 
-from .grid import SimGrid
+from .grid import FDGrid
 from .typing import Shape, Dim, GridSpacing, Optional, Union, Source, State
 from .utils import pml_params, curl_fn, yee_avg
 import jax.numpy as jnp
 
 
-class FDTD(SimGrid):
+class FDTD(FDGrid):
     """Stateless Finite Difference Time Domain (FDTD) implementation
 
         Notes:
@@ -49,7 +49,7 @@ class FDTD(SimGrid):
             gpu: use the GPU to accelerate the computation
     """
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
-                 pml: Optional[Union[Shape, Dim]] = None, use_jax: bool = False, name: str = 'fdtd'):
+                 pml: Optional[Union[Shape, Dim]] = None, use_jax: bool = True, name: str = 'fdtd'):
         super(FDTD, self).__init__(shape, spacing, eps, pml=pml, name=name)
         self.dt = 1 / np.sqrt(np.sum(1 / self.spacing ** 2))  # includes courant condition!
 
@@ -100,7 +100,7 @@ class FDTD(SimGrid):
         psi_h = None if self.pml_shape is None else [self.xp.zeros_like(e[s]) for s in self.pml_regions]
         return e, h, psi_e, psi_h
 
-    def step_pml(self, state: State, src: np.ndarray, src_region: np.ndarray) -> State:
+    def step(self, state: State, src: np.ndarray, src_region: np.ndarray) -> State:
         """FDTD step (in the form of an RNNCell)
 
         Args:
@@ -167,7 +167,7 @@ class FDTD(SimGrid):
         for step in iterator:
             source = src[step] if isinstance(src, np.ndarray) else src(step * self.dt)
             source_idx = src_idx[step] if isinstance(src_idx, list) else src_idx
-            state = self.step_pml(state, source, source_idx)
+            state = self.step(state, source, source_idx)
         return state
 
     def _cpml(self, ax: int, alpha_max: float = 0, exp_scale: float = 3,

@@ -5,13 +5,12 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import eigs
 from typing import Tuple
 
-from .grid import SimGrid
+from .grid import FDGrid
 from .typing import Shape, Dim, GridSpacing, Optional, Union
-from .sources import xs_profile
 from scipy.linalg import solve_banded
 
 
-class BPM(SimGrid):
+class BPM(FDGrid):
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
                  wavelength: float = 1.55, bloch_phase: Union[Dim, float] = 0.0,
                  pml: Optional[Union[Shape, Dim]] = None, pml_eps: float = 1.0,
@@ -40,7 +39,7 @@ class BPM(SimGrid):
         center = (0, self.shape[1] // 2, self.shape[2] // 2) if center is None else center
         shape = self.eps[0].shape if shape is None else shape
         self.x = center[0]
-        self.beta, _, self.e, self.h = xs_profile(self, center=center, size=shape, axis=axis)
+        self.beta, _, self.e, self.h = mode_profile(self, center=center, size=shape, axis=axis)
 
     def adi_polarized(self, te: bool = True):
         """The ADI step for beam propagation method based on https://publik.tuwien.ac.at/files/PubDat_195610.pdf

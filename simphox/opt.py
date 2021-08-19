@@ -1,6 +1,7 @@
 from collections import defaultdict
 
 from .fdfd import FDFD
+from .sim import SimGrid
 from .typing import Optional, Callable, Union, List, Tuple, Dict
 
 import jax
@@ -8,11 +9,16 @@ import jax.numpy as jnp
 from jax.config import config
 from jax.experimental.optimizers import adam
 import numpy as np
-import holoviews as hv
-from holoviews.streams import Pipe
-import panel as pn
 import dataclasses
 import xarray
+
+try:
+    HOLOVIEWS_IMPORTED = True
+    import holoviews as hv
+    from holoviews.streams import Pipe
+    import panel as pn
+except ImportError:
+    HOLOVIEWS_IMPORTED = False
 
 from .viz import scalar_metrics_viz
 
@@ -49,9 +55,9 @@ class OptProblem:
     """
     transform_fn: Callable
     cost_fn: Callable
-    fdfd: FDFD
-    source: np.ndarray
-    metrics_fn: Optional[Callable[[np.ndarray, FDFD], Dict]] = None
+    sim: SimGrid
+    source: str
+    metrics_fn: Optional[Callable[[np.ndarray, SimGrid], Dict]] = None
 
 
 @dataclasses.dataclass
@@ -72,13 +78,13 @@ class OptViz:
         metric_config: Metric config (a dictionary that describes how to plot/group the real-time metrics)
 
     """
-    cost_dmap: hv.DynamicMap
-    simulations_panels: Dict[str, pn.layout.Panel]
-    costs_pipe: Pipe
-    simulations_pipes: Dict[str, Tuple[Pipe, Pipe, Pipe]]
+    cost_dmap: "hv.DynamicMap"
+    simulations_panels: Dict[str, "pn.layout.Panel"]
+    costs_pipe: "Pipe"
+    simulations_pipes: Dict[str, Tuple["Pipe", "Pipe", "Pipe"]]
     metric_config: Optional[Dict[str, List[str]]] = None
-    metrics_panels: Optional[Dict[str, hv.DynamicMap]] = None
-    metrics_pipes: Optional[Dict[str, Dict[str, Pipe]]] = None
+    metrics_panels: Optional[Dict[str, "hv.DynamicMap"]] = None
+    metrics_pipes: Optional[Dict[str, Dict[str, "Pipe"]]] = None
 
 
 @dataclasses.dataclass
@@ -138,14 +144,14 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
     opt_problems = [opt_problem] if isinstance(opt_problem, OptProblem) else opt_problem
 
     # opt problems that include both an FDFD sim and a source sim
-    sim_opt_problems = [op for op in opt_problems if op.fdfd is not None and op.source is not None]
+    sim_opt_problems = [op for op in opt_problems if op.sim is not None and op.source is not None]
 
     if viz is not None:
         if not len(viz.simulations_pipes) == len(sim_opt_problems):
             raise ValueError("Number of viz_pipes must match number of opt problems")
 
     # Define the objective function acting on parameters rho
-    solve_fn = [None if (op.source is None or op.fdfd is None) else op.fdfd.get_opt_solve(op.source, op.transform_fn)
+    solve_fn = [None if (op.source is None or op.sim is None) else op.sim.get_sim_sparams_fn(op.source, op.transform_fn)
                 for op in opt_problems]
 
     def overall_cost_fn(rho: jnp.ndarray):
@@ -153,15 +159,15 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
         return jnp.array([obj for obj, _ in evals]).sum(), [aux for _, aux in evals]
 
     # Define a compiled update step
-    def step_(i, opt_state):
-        vaux, g = jax.value_and_grad(overall_cost_fn, has_aux=True)(get_params(opt_state))
+    def step_(current_step, state):
+        vaux, g = jax.value_and_grad(overall_cost_fn, has_aux=True)(get_params(state))
         v, aux = vaux
-        return v, opt_update(i, g, opt_state), aux
+        return v, opt_update(current_step, g, state), aux
 
     def _update_eps(state):
         rho = get_params(state)
         for op in opt_problems:
-            op.fdfd.eps = np.asarray(op.transform_fn(rho))
+            op.sim.eps = np.asarray(jax.lax.stop_gradient(op.transform_fn(rho)))
 
     step = jax.jit(step_, backend=backend)
 
@@ -171,27 +177,29 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
     history = defaultdict(list)
 
     for i in iterator:
-        v, opt_state, fields = step(i, opt_state)
+        v, opt_state, data = step(i, opt_state)
         if viz_interval > 0 and i % viz_interval == 0:
             _update_eps(opt_state)
-            if viz.simulations_pipes is not None:
-                for sop, h in zip(sim_opt_problems, fields):
-                    fdfd = sop.fdfd
-                    eps_pipe, field_pipe, power_pipe = viz.simulations_pipes[fdfd.name]
-                    eps_pipe.send((fdfd.eps.T - np.min(fdfd.eps)) / (np.max(fdfd.eps) - np.min(fdfd.eps)))
-                    hz = np.reshape(np.asarray(h), fdfd.shape).squeeze().T
+            if viz is not None:
+                for sop, sparams_fields in zip(sim_opt_problems, data):
+                    sim = sop.sim
+                    sparams, fields = sparams_fields
+                    eps_pipe, field_pipe, power_pipe = viz.simulations_pipes[sim.name]
+                    eps_pipe.send((sim.eps.T - np.min(sim.eps)) / (np.max(sim.eps) - np.min(sim.eps)))
+                    hz = np.asarray(fields[-1]).squeeze().T
                     power = np.abs(hz) ** 2
                     field_pipe.send(hz.real / np.max(hz.real))
                     power_pipe.send(power / np.max(power))
-        if metric_interval > 0 and i % metric_interval == 0 and viz.metrics_pipes is not None:
-            for sop, h in zip(sim_opt_problems, fields):
-                metrics = sop.metrics_fn(h, sop.fdfd)
+        if metric_interval > 0 and i % metric_interval == 0 and viz is not None:
+            for sop, sparams_fields in zip(sim_opt_problems, data):
+                sparams, _ = sparams_fields
+                metrics = sop.metrics_fn(sparams)
                 for metric_name, metric_value in metrics.items():
-                    history[f'{metric_name}/{sop.fdfd.name}'].append(metric_value)
-                for title in viz.metrics_pipes[sop.fdfd.name]:
-                    viz.metrics_pipes[sop.fdfd.name][title].send(
+                    history[f'{metric_name}/{sop.sim.name}'].append(metric_value)
+                for title in viz.metrics_pipes[sop.sim.name]:
+                    viz.metrics_pipes[sop.sim.name][title].send(
                         xarray.DataArray(
-                            data=np.asarray([history[f'{metric_name}/{sop.fdfd.name}']
+                            data=np.asarray([history[f'{metric_name}/{sop.sim.name}']
                                              for metric_name in viz.metric_config[title]]),
                             coords={
                                 'metric': viz.metric_config[title],
@@ -203,19 +211,19 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
                     )
         if eps_interval > 0 and i % eps_interval == 0:
             for sop in sim_opt_problems:
-                history[f'eps/{sop.fdfd.name}'].append((i, sop.fdfd.eps))
+                history[f'eps/{sop.sim.name}'].append((i, sop.sim.eps))
         iterator.set_description(f"𝓛: {v:.5f}")
         costs.append(v)
-        if viz.costs_pipe is not None:
+        if viz is not None:
             viz.costs_pipe.send(np.asarray(costs))
     _update_eps(opt_state)
 
     all_metric_names = sum([metric_names for _, metric_names in viz.metric_config.items()], [])
     metrics = xarray.DataArray(
-        data=np.asarray([[history[f'{metric_name}/{sop.fdfd.name}']
-                         for metric_name in all_metric_names] for sop in sim_opt_problems]),
+        data=np.asarray([[history[f'{metric_name}/{sop.sim.name}']
+                          for metric_name in all_metric_names] for sop in sim_opt_problems]),
         coords={
-            'name': [sop.fdfd.name for sop in sim_opt_problems],
+            'name': [sop.sim.name for sop in sim_opt_problems],
             'metric': all_metric_names,
             'iteration': np.arange(num_iters)
         },
@@ -223,13 +231,13 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
         name='metrics'
     ) if sim_opt_problems else []
     eps = xarray.DataArray(
-        data=np.asarray([[eps for _, eps in history[f'eps/{sop.fdfd.name}']] if eps_interval > 0 else []
+        data=np.asarray([[eps for _, eps in history[f'eps/{sop.sim.name}']] if eps_interval > 0 else []
                          for sop in sim_opt_problems]),
         coords={
-            'name': [sop.fdfd.name for sop in sim_opt_problems],
-            'iteration': [it for it, _ in history[f'eps/{sim_opt_problems[0].fdfd.name}']],
-            'x': np.arange(sim_opt_problems[0].fdfd.shape[0]),
-            'y': np.arange(sim_opt_problems[0].fdfd.shape[1]),
+            'name': [sop.sim.name for sop in sim_opt_problems],
+            'iteration': [it for it, _ in history[f'eps/{sim_opt_problems[0].sim.name}']],
+            'x': np.arange(sim_opt_problems[0].sim.shape[0]),
+            'y': np.arange(sim_opt_problems[0].sim.shape[1]),
         },
         dims=['name', 'iteration', 'x', 'y'],
         name='eps'
@@ -249,12 +257,12 @@ def opt_viz(opt_problem: Union[OptProblem, List[OptProblem]], metric_config: Dic
 
     """
     opt_problems = [opt_problem] if isinstance(opt_problem, OptProblem) else opt_problem
-    viz_panel_pipes = {op.fdfd.name: op.fdfd.viz_panel()
-                       for op in opt_problems if op.fdfd is not None and op.source is not None}
+    viz_panel_pipes = {op.sim.name: op.sim.viz_panel()
+                       for op in opt_problems if op.sim is not None and op.source is not None}
     costs_pipe = Pipe(data=[])
 
-    metrics_panel_pipes = {op.fdfd.name: scalar_metrics_viz(metric_config=metric_config)
-                           for op in opt_problems if op.fdfd is not None and op.source is not None}
+    metrics_panel_pipes = {op.sim.name: scalar_metrics_viz(metric_config=metric_config)
+                           for op in opt_problems if op.sim is not None and op.source is not None}
 
     return OptViz(
         cost_dmap=hv.DynamicMap(hv.Curve, streams=[costs_pipe]).opts(title='Cost Fn (𝓛)'),

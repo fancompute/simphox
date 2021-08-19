@@ -1,6 +1,7 @@
-from typing import Union, Tuple, List, Optional, Dict, Callable
+from typing import Union, Tuple, List, Optional, Dict, Callable, Iterable
 import numpy as np
 import scipy.sparse as sp
+import jax.numpy as jnp
 
 Shape2 = Tuple[int, int]
 Shape3 = Tuple[int, int, int]
@@ -14,3 +15,4 @@ Op = Callable[[np.ndarray], np.ndarray]
 SpSolve = Callable[[sp.spmatrix, np.ndarray], np.ndarray]
 Source = Union[Callable[[float], Tuple[np.ndarray, np.ndarray]], np.ndarray]
 State = Tuple[np.ndarray, np.ndarray, Optional[List[np.ndarray]], Optional[List[np.ndarray]]]
+Array = Union[jnp.ndarray, np.ndarray]

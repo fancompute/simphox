@@ -6,7 +6,7 @@ import scipy.sparse as sp
 
 from dphox.component import Pattern, Callable, Port
 
-from .typing import Shape, Dim, GridSpacing, Optional, List, Union, Dict
+from .typing import Shape, Dim, GridSpacing, Optional, List, Union, Dict, Tuple
 from .utils import curl_fn, yee_avg
 
 
@@ -23,6 +23,7 @@ class Grid:
         self.spacing = spacing * np.ones(len(shape)) if isinstance(spacing, float) else np.asarray(spacing)
         self.ndim = len(shape)
         self.shape3 = np.hstack((self.shape, np.ones((3 - self.ndim,), dtype=self.shape.dtype)))
+        self.spacing3 = np.hstack((self.spacing, np.ones((3 - self.ndim,), dtype=self.spacing.dtype) * np.inf))
 
         if not self.ndim == len(self.spacing):
             raise AttributeError(f'Require len(grid_shape) == len(grid_spacing) but got'
@@ -35,12 +36,13 @@ class Grid:
         self.size = self.spacing * self.shape
         self.cell_sizes = [self.spacing[i] * np.ones((self.shape[i],))
                            if i < self.ndim else np.ones((1,)) for i in range(3)]
-        self.pos = [np.hstack((0, np.cumsum(dx))) if dx.size > 1 else None for dx in self.cell_sizes]
+        self.pos = [np.hstack((0, np.cumsum(dx))) if dx.size > 1 else np.asarray((0,)) for dx in self.cell_sizes]
         self.components = []
 
         # used to handle special functions of waveguide-based components
         self.port: Dict[str, Port] = {}
-        self.port_w = None
+        self.port_thickness = 0
+        self.port_height = 0
 
     def _check_bounds(self, component) -> bool:
         b = component.bounds
@@ -59,6 +61,8 @@ class Grid:
         """
         if zmax > 0:
             self.eps[..., :int(zmax / self.spacing[-1])] = eps
+        else:
+            self.eps = np.ones_like(self.eps) * eps
         return self
 
     def add(self, component: Pattern, eps: float, zmin: float = None, thickness: float = None) -> "Grid":
@@ -83,8 +87,9 @@ class Grid:
         else:
             zidx = (int(zmin / self.spacing[0]), int((zmin + thickness) / self.spacing[1]))
             self.eps[mask == 1, zidx[0]:zidx[1]] = eps
-        self.port = component.port
-        self.port_w = component.config.get('waveguide_w', None)
+        self.port = {port_name: port for port_name, port in component.port.items()}
+        self.port_thickness = 0 if thickness is None else thickness
+        self.port_height = 0 if thickness is None else zmin + thickness / 2
         return self
 
     def reshape(self, v: np.ndarray) -> np.ndarray:
@@ -99,8 +104,87 @@ class Grid:
         """
         return np.stack([split_v.reshape(self.shape3) for split_v in np.split(v, 3)]) if v.ndim == 1 else v.flatten()
 
+    def slice(self, center: Tuple[float, float, float], size: Tuple[float, float, float], squeezed: bool = True):
+        """Pick a slide of this grid
 
-class SimGrid(Grid):
+        Args:
+            center: position of the mode in (x, y, z) in the units of the simulation (note: NOT in terms of array index)
+            size: position of the mode in (x, y, z) in the units of the simulation (note: NOT in terms of array index)
+            squeezed: whether to squeeze the slice to the minimum dimension (the squeeze order is z, then y).
+
+        Returns:
+            The slices to access the array
+
+        """
+        if self.ndim == 1:
+            raise ValueError(f"Simulation dimension ndim must be 2 or 3 but got {self.ndim}.")
+        if not len(size) == 3:
+            raise ValueError(f"For simulation that is 3d, must provide size arraylike of size 3 but got {size}")
+        if not len(center) == 3:
+            raise ValueError(f"For simulation that is 3d, must provide center arraylike of size 3 but got {center}")
+
+        c = (np.asarray(center) / self.spacing3).astype(np.int)  # assume isotropic for now...
+        shape = (np.asarray(size) / self.spacing3).astype(np.int)
+
+        s0, s1, s2 = shape[0] // 2, shape[1] // 2, shape[2] // 2
+        c0 = c[0] if squeezed else slice(c[0], c[0] + 1)
+        c1 = c[1] if squeezed else slice(c[1], c[2] + 1)
+        c2 = c[2] if squeezed else slice(c[2], c[2] + 1)
+        if s0 == s1 == s2 == 0:
+            raise ValueError(f"Require the size result in a nonzero-sized shape, but got a single point in the grid"
+                             f"(i.e., the size {size} may be less than the spacing {self.spacing3})")
+        return (slice(c[0] - s0, c[0] - s0 + shape[0]) if shape[0] > 0 else c0,
+                slice(c[1] - s1, c[1] - s1 + shape[1]) if shape[1] > 0 else c1,
+                slice(c[2] - s2, c[2] - s2 + shape[2]) if shape[2] > 0 else c2)
+
+    def view_fn(self, center: Tuple[float, float, float], size: Tuple[float, float, float], use_jax: bool = True,
+                squeezed: bool = False):
+        """Return a function that views a field at specific region specified by center and size in the grid. This
+        is used for mode measurements.
+
+        Args:
+            center: Center of the region
+            size: Size of the region
+            use_jax: Use jax
+            squeezed: Whether to squeeze the array when viewing the fields
+
+        Returns:
+            A view callable function that orients the field and finds the appropriate slice
+
+        """
+        if np.count_nonzero(size) == 3:
+            raise ValueError(f"At least one element of size must be zero, but got {size}")
+        s = self.slice(center, size, squeezed=squeezed)
+        xp = jnp if use_jax else np
+
+        # Find the view axis (the poynting direction)
+        view_axis = 0
+        for i in range(self.ndim):
+            if size[i] == 0:
+                view_axis = i
+
+        # Find the reorientation of field axes based on view_axis
+        # 0 -> (1, 2, 0)
+        # 1 -> (0, 2, 1)
+        # 2 -> (0, 1, 2)
+        axes = [
+            np.asarray((1, 2, 0), dtype=np.int),
+            np.asarray((0, 2, 1), dtype=np.int),
+            np.asarray((0, 1, 2), dtype=np.int)
+        ][view_axis]
+
+        def view(field):
+            oriented_field = xp.stack(
+                (xp.atleast_3d(field[axes[0]]),
+                 xp.atleast_3d(field[axes[1]]),
+                 xp.atleast_3d(field[axes[2]]))
+            )  # orient the field by axis (useful for mode calculation)
+            return oriented_field[:, s[0], s[1], s[2]].transpose(0, *(1 + axes))
+
+        return view
+
+
+class FDGrid(Grid):
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
                  bloch_phase: Union[Dim, float] = 0.0, pml: Optional[Union[int, Shape, Dim]] = None,
                  pml_eps: float = 1.0, yee_avg: int = 1, name: str = 'simgrid'):
@@ -116,7 +200,7 @@ class SimGrid(Grid):
             pml_eps: The permittivity used to scale the PML (should probably assign to 1 for now)
             yee_avg: whether to do a yee average (highly recommended)
         """
-        super(SimGrid, self).__init__(shape, spacing, eps)
+        super(FDGrid, self).__init__(shape, spacing, eps)
         self.pml_shape = np.asarray(pml, dtype=np.int) if isinstance(pml, tuple) else pml
         self.pml_shape = np.ones(self.ndim, dtype=np.int) * pml if isinstance(pml, int) else pml
         self.pml_eps = pml_eps
@@ -214,15 +298,16 @@ class SimGrid(Grid):
         """
         return curl_fn(self.diff_fn(use_h=True, use_jax=use_jax), use_jax=use_jax, beta=beta)
 
-    def pml_safe_placement(self, x: float, y: float, safe_threshold: float = 0.1):
-        """ Specifies a new x and y that are safe from the PML region / esge of the simulation.
+    def pml_safe_placement(self, x: float, y: float, safe_threshold: float = 0.1) -> Tuple[float, float]:
+        """ Specifies a placement that is safe from the PML region / edge of the simulation.
 
         Args:
             x: Input x location
             y: Input y location
+            safe_threshold: Safe threshold to place the point from the PML region
 
         Returns:
-            New x, y tuple that is safe from PML.
+            New x, y tuple that is safe from PML (at least :code:`safe_threshold` away from the PML in simulation units).
 
         """
         pml = self.pml_shape * self.spacing + safe_threshold

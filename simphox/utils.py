@@ -6,8 +6,11 @@ from jax.scipy.signal import convolve as conv
 from skimage.draw import disk
 from typing import Tuple, Union, Optional
 from copy import deepcopy
+import xarray as xr
 
 from .typing import List, Callable, Dim2
+
+SMALL_NUMBER = 1e-20
 
 
 class Box:
@@ -118,25 +121,22 @@ class Box:
                 box.copy.flip_xy().halign(self, left=False).valign(self, bottom=False)]
 
 
-def poynting_z(e: np.ndarray, h: np.ndarray):
-    e_cross = np.stack([(e[0] + np.roll(e[0], shift=1, axis=1)) / 2,
-                        (e[1] + np.roll(e[1], shift=1, axis=0)) / 2])
-    h_cross = np.stack([(h[0] + np.roll(h[0], shift=1, axis=0)) / 2,
-                        (h[1] + np.roll(h[1], shift=1, axis=1)) / 2])
-    return e_cross[0] * h_cross.conj()[1] - e_cross[1] * h_cross.conj()[0]
+def poynting_fn(axis: int = 2, use_jax: bool = False):
+    ax = np.roll((1, 2, 0), -axis)
+    xp = jnp if use_jax else np
 
-
-def poynting_x(e: np.ndarray, h: np.ndarray):
-    e_cross = np.stack([(e[1] + np.roll(e[1], shift=1, axis=1)) / 2,
-                        (e[2] + np.roll(e[2], shift=1, axis=0)) / 2])
-    h_cross = np.stack([(h[1] + np.roll(h[1], shift=1, axis=0)) / 2,
-                        (h[2] + np.roll(h[2], shift=1, axis=1)) / 2])
-    return e_cross[1] * h_cross.conj()[2] - e_cross[2] * h_cross.conj()[1]
+    def poynting(e: np.ndarray, h: np.ndarray):
+        e_cross = xp.stack([(e[ax[0]] + xp.roll(e[ax[0]], shift=1, axis=1)) / 2,
+                            (e[ax[1]] + xp.roll(e[ax[1]], shift=1, axis=0)) / 2])
+        h_cross = xp.stack([(h[ax[0]] + xp.roll(h[ax[0]], shift=1, axis=0)) / 2,
+                            (h[ax[1]] + xp.roll(h[ax[1]], shift=1, axis=1)) / 2])
+        return e_cross[ax[0]] * h_cross.conj()[ax[1]] - e_cross[ax[1]] * h_cross.conj()[ax[0]]
+    return poynting
 
 
 def overlap(e1: np.ndarray, h1: np.ndarray, e2: np.ndarray, h2: np.ndarray):
-    return (np.sum(poynting_z(e1, h2)) * np.sum(poynting_z(e2, h1)) /
-            np.sum(poynting_z(e1, h1))).real / np.sum(poynting_z(e2, h2)).real
+    return (np.sum(poynting_fn(2)(e1, h2)) * np.sum(poynting_fn(2)(e2, h1)) /
+            np.sum(poynting_fn(2)(e1, h1))).real / np.sum(poynting_fn(2)(e2, h2)).real
 
 
 def d2curl_op(d: List[sp.spmatrix]) -> sp.spmatrix:
@@ -172,11 +172,26 @@ def yee_avg(params: np.ndarray, shift: int = 1) -> np.ndarray:
     return np.stack([p_x, p_y, p_z])
 
 
-def yee_avg_2d(params: jnp.ndarray) -> jnp.ndarray:
+def yee_avg_2d_z(params: jnp.ndarray) -> jnp.ndarray:
     p = params[..., jnp.newaxis]
     p_y = (p + jnp.roll(p, shift=1, axis=0)) / 2
     p_z = (p_y + jnp.roll(p_y, shift=1, axis=1)) / 2
     return p_z
+
+
+def yee_avg_2d_xy(params: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    p = params[..., jnp.newaxis]
+    p_x = (p + jnp.roll(p, shift=1, axis=1)) / 2
+    p_y = (p + jnp.roll(p, shift=1, axis=0)) / 2
+    return p_x, p_y
+
+
+def yee_avg_jax(params: jnp.ndarray) -> jnp.ndarray:
+    p = jnp.atleast_3d(params)
+    p_x = (p + jnp.roll(p, shift=1, axis=1)) / 2
+    p_y = (p + jnp.roll(p, shift=1, axis=0)) / 2
+    p_z = (p_x + p_y) / 2
+    return jnp.stack((p_x, p_y, p_z))
 
 
 def pml_params(pos: np.ndarray, t: int, exp_scale: float, log_reflection: float, absorption_corr: float):
@@ -269,12 +284,56 @@ def place_rho_2d_fn_temp(rho_init: jnp.ndarray, box: Box, ud_symmetry: bool = Fa
     return place_rho
 
 
-def match_mode_2d(s, aux: bool = True):
-    if aux:
-        def obj(ez):
-            return -jnp.sum(jnp.abs(ez.conj() * s.ravel())), jax.lax.stop_gradient(ez)
-    else:
-        def obj(ez):
-            return -jnp.sum(jnp.abs(ez.conj() * s.ravel()))  # want to minimize this to maximize mode match
+# def match_mode_2d(src: jnp.ndarray, aux: bool = True) -> Callable[[jnp.ndarray], jnp.ndarray]:
+#     """ Returns the mode matching loss given a source
+#
+#     Args:
+#         src: Source profile for calculating mode match integral
+#         aux: Whether to incorporate aux data to keep the field info
+#
+#     Returns:
+#
+#
+#     """
+#     if aux:
+#         def obj(field):
+#             return -jnp.sum(jnp.abs(field.conj() * src.ravel())), jax.lax.stop_gradient(field)
+#     else:
+#         def obj(field):
+#             return -jnp.sum(jnp.abs(field.conj() * src.ravel()))  # want to minimize this to maximize mode match
+#
+#     return obj
+
+
+def fidelity(s: jnp.ndarray) -> Callable:
+    """ Returns the fidelity for the sparams.
+
+    Args:
+        s: The desired sparams; if not an ndarray and/or not normalized, it is converted to a normalized ndarray.
+
+    Returns:
+        The fidelity based on the desired sparams :code:`s`.
+
+    """
+
+    s = np.array(s)
+    s = s / np.linalg.norm(s)
+
+    def obj(sparams_fields: Tuple[jnp.ndarray, jnp.ndarray]):
+        sparams, fields = sparams_fields
+        return s.conj().T @ sparams, jax.lax.stop_gradient((sparams, fields))
 
     return obj
+
+
+# Real-time splitter metrics
+def splitter_metrics(sparams: xr.DataArray):
+    powers = np.abs(sparams) ** 2
+    return {
+        'reflectivity': powers.loc["b0"] / (powers.loc["b0"] + powers.loc["b1"]),
+        'transmissivity': powers.loc["b1"] / (powers.loc["b0"] + powers.loc["b1"]),
+        'reflection': powers.loc["a0"],
+        'insertion': powers.sum(),
+        'upper': powers.loc["b0"],
+        'lower': powers.loc["b1"],
+    }
