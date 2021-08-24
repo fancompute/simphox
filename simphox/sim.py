@@ -6,7 +6,7 @@ import jax.numpy as jnp
 
 from .grid import FDGrid
 from .mode import ModeSolver, ModeLibrary
-from .typing import GridSpacing, Shape, Union, Dim, Optional, List, Tuple, Shape2, Dim2, Dict, Dim3, Array
+from .typing import GridSpacing, Shape, Union, Dim, Optional, List, Tuple, Shape2, Dim2, Dict, Dim3, Iterable, Array
 
 from .viz import get_extent_2d
 
@@ -29,7 +29,7 @@ class SimCrossSection:
     center: Tuple[float, float, float]
     size: Tuple[float, float, float]
 
-    def place(self, mode_idx, grid):
+    def place(self, mode_idx, grid) -> np.ndarray:
         return self.io.place(mode_idx, grid, self.center, self.size)
 
 
@@ -177,7 +177,7 @@ class SimGrid(FDGrid):
     #     src = self.gaussian_source(profiles, pulse_width, center_wavelength, dt, t0, linear_chirp)
     #     return lambda tt: src[tt // dt]
 
-    def port_to_excitation_center_size(self, profile_size_factor: float = 2) -> Tuple[Dict[str, Dim3], Dict[str, Dim3]]:
+    def port_to_center_size(self, profile_size_factor: float = 2) -> Tuple[Dict[str, Dim3], Dict[str, Dim3]]:
         """Returns a dictionary from each port to the center of size used for port excitations.
 
         Args:
@@ -218,25 +218,25 @@ class SimGrid(FDGrid):
         """
 
         excitation = [(port, 0) for port in self.port] if excitation is None else excitation
-        port_to_center, port_to_size = self.port_to_excitation_center_size(profile_size_factor)
+        port_to_center, port_to_size = self.port_to_center_size(profile_size_factor)
 
         return {name: self.modes(center=port_to_center[name], size=port_to_size[name],
                                  num_modes=np.max([mode_idx
                                                    for port_name, mode_idx in excitation if port_name == name]) + 1)
                 for name, p in self.port.items()}
 
-    def port_source(self, source: Union[Dict[Tuple[str, int], float], Tuple[float, ...]] = (1,),
-                    profile_size_factor: float = 2) -> np.ndarray:
+    def port_source(self, source: Optional[Union[Dict[Tuple[str, int], float], Dict[str, float]]] = None,
+                    profile_size_factor: float = 2, unidirectional: bool = True) -> np.ndarray:
         """Return a non-sparse source array based on the ports defined in the simulation grid.
 
         Args:
-            source: Map each port and mode index to a weight to yield a weighted port source. If a tuple is specified,
-                applies weight to fundamental mode at the appropriate port
-                according to the port-order interpreted by alphabetically ordered port names (input
-                ports of the form :code:`a0, a1 ...` are accessed before output ports of the form :code:`b0, b1 ...`).
-                If a dictionary is specified, it must be of the form :code:`{(port_name, mode_idx): weight}`,
-                and a source is then created by summing the contributions from all of those ports.
+            source: Map each port and mode index to a weight to yield a weighted port source.
+                If a dictionary is specified, it can be of the form :code:`{(port_name, mode_idx): weight}` or
+                :code:`{port_name: weight}`, where in the latter case, a default mode index of 0 is used.
+                A source is then created by summing the contributions from all of those ports.
             profile_size_factor: Factor to rescale the mode view slice compared to the port
+            unidirectional: In FDFD, this specifies whether to send the mode in unidirectionally, determined
+                using the port angle.
 
         Returns:
             The non-sparse source array that can be used as a source profile for either FDFD or FDTD
@@ -244,20 +244,31 @@ class SimGrid(FDGrid):
         """
         ports = list(self.port.keys())
         # if the source is a list of numbers, just assign the appropriate weight to the port's fundamental mode
+        source = {(ports[0], 0): 1} if source is None else source
         source = {(port, 0): weight for port, weight in zip(ports, source)} if isinstance(source, tuple) else source
         source_library = self.port_modes(profile_size_factor=profile_size_factor)
-        return sum([source_library[port_mode[0]].place(port_mode[1], self) * weight
-                    for port_mode, weight in source.items()])
+
+        def prepare_source(port_mode: Tuple[str, int], weight: complex):
+            axis = int(np.mod(self.port[port_mode[0]].a, np.pi) == np.pi / 2)
+            beta = source_library[port_mode[0]].io.betas[port_mode[1]]
+            shift = 2 * (np.mod(self.port[port_mode[0]].a, 2 * np.pi) < np.pi) - 1
+            src = source_library[port_mode[0]].place(port_mode[1], self) * weight
+            src = np.roll(src, axis=axis, shift=2 * shift)
+            if unidirectional:
+                src += np.roll(src, axis=axis, shift=shift) * np.exp(-1j * self.spacing[axis] * beta - 1j * np.pi)
+            return src
+
+        return sum([prepare_source(port_mode, weight) for port_mode, weight in source.items()])
 
     def get_measure_fn(self, measure_info: List[Tuple[str, int]] = None,
-                       profile_size_factor: float = 2, use_jax: bool = False, te_2d: bool = True):
+                       profile_size_factor: float = 2, use_jax: bool = False, tm_2d: bool = True):
         """Measure function: measure the fields using the Modes object provided for each port
 
         Args:
             measure_info: List of port name and mode index at that port
             profile_size_factor: Factor to rescale the mode view slice compared to the port
             use_jax: Whether to use jax in the measure function (relevant for simulations).
-            te_2d: Whether we are measuring the 2D simulation
+            tm_2d: Whether to use TM polarization (applies to the 2D case only).
 
         Returns:
             Callable function that gives port-wise measurements
@@ -272,8 +283,8 @@ class SimGrid(FDGrid):
         # We measure polarity, which is the orientation of the measurement interface
         # to determine whether the wave is entering or leaving the device
         # The polarity below assumes that ports are near edge of simulation.
-        polarity = 2 * (np.asarray(angles) < np.pi) - 1
-        measure_fns = [port_to_modes[port_name].io.measure_fn(m, use_jax, te_2d=te_2d) for port_name, m in measure_info]
+        polarity = 2 * (np.mod(angles, 2 * np.pi) < np.pi).astype(np.int) - 1
+        measure_fns = [port_to_modes[port_name].io.measure_fn(m, use_jax, tm_2d=tm_2d) for port_name, m in measure_info]
         view_fns = [self.view_fn(port_to_modes[port_name].center, port_to_modes[port_name].size, use_jax)
                     for port_name, _ in measure_info]
 
@@ -281,13 +292,12 @@ class SimGrid(FDGrid):
 
         def measure_fn(fields):
             e, h = fields
-            return xp.stack([measure_fns[i](view_fns[i](e), view_fns[i](h))[::polarity[i]]
-                             for i in port_nums]).T
+            return xp.stack([measure_fns[i](view_fns[i](e), view_fns[i](h))[::polarity[i]] for i in port_nums]).T
 
         return measure_fn
 
     def get_fields_fn(self, src: Union[np.ndarray, Callable],
-                      transform_fn: Optional[Callable] = None, te_2d: bool = True) -> Callable:
+                      transform_fn: Optional[Callable] = None, tm_2d: bool = True) -> Callable:
         """Returns a function that yields the fields given a transform function and source.
 
         We first initialize the problem solver given two callable functions:
@@ -308,7 +318,7 @@ class SimGrid(FDGrid):
         raise NotImplementedError("A child class of SimGrid needs to implement get_fields_fn")
 
     def get_sim_fn(self, src: Union[np.ndarray, Callable], transform_fn: Optional[Callable] = None,
-                   te_2d: bool = True) -> Callable:
+                   tm_2d: bool = True) -> Callable:
         """Returns a function that measures the sparams and fields.
 
         We first initialize the optimization problem solver given two callable functions:
@@ -321,15 +331,15 @@ class SimGrid(FDGrid):
         Args:
             src: source for the solver
             transform_fn: Transforms parameters to yield the epsilon function used by jax
-            te_2d: Whether to use TE polarization (applies to the 2D case only).
+            tm_2d: Whether to use TM polarization (applies to the 2D case only).
 
         Returns:
             A solve function (2d or 3d based on defined :code:`ndim` specified for the instance of :code:`FDFD`)
 
         """
 
-        fields_fn = self.get_fields_fn(src, transform_fn, te_2d=te_2d)
-        measure_fn = self.get_measure_fn(use_jax=True, te_2d=te_2d)
+        fields_fn = self.get_fields_fn(src, transform_fn, tm_2d=tm_2d)
+        measure_fn = self.get_measure_fn(use_jax=True, tm_2d=tm_2d)
 
         @jax.jit
         def sim_fn(rho: jnp.ndarray):
@@ -341,7 +351,7 @@ class SimGrid(FDGrid):
 
     def get_sim_sparams_fn(self, port_name: Optional[str] = None, transform_fn: Optional[Callable] = None,
                            mode_idx: int = 0, profile_size_factor: int = 2,
-                           measure_info: Optional[List[Tuple[str, int]]] = None, te_2d: bool = True) ->Callable:
+                           measure_info: Optional[List[Tuple[str, int]]] = None, tm_2d: bool = True) -> Callable:
         """Returns a function that measures the sparams and fields.
 
         We first initialize the optimization problem solver given a JAX-transformable transform function
@@ -355,7 +365,7 @@ class SimGrid(FDGrid):
             transform_fn: Transforms parameters to yield the epsilon function used by jax (identity if None)
             profile_size_factor: Profile size factor to rescale the port size to get mode size
             measure_info: Measurement info consisting of a list of port name and mode index pairs
-            te_2d: Whether to use TE polarization (applies to the 2D case only).
+            tm_2d: Whether to use TM polarization (applies to the 2D case only).
 
         Returns:
             A solve function (2d or 3d based on defined :code:`ndim` specified for the instance of :code:`FDFD`)
@@ -365,8 +375,8 @@ class SimGrid(FDGrid):
         source_info = (port_name, mode_idx) if port_name is not None else measure_info[0]
         fields_fn = self.get_fields_fn(src=self.port_source({source_info: 1}, profile_size_factor=profile_size_factor),
                                        transform_fn=transform_fn,
-                                       te_2d=te_2d)
-        measure_fn = self.get_measure_fn(use_jax=True, te_2d=te_2d)
+                                       tm_2d=tm_2d)
+        measure_fn = self.get_measure_fn(use_jax=True, tm_2d=tm_2d)
         port_idx = measure_info.index(source_info)
 
         @jax.jit
@@ -504,3 +514,30 @@ class SimGrid(FDGrid):
             }
         )
         return decorated_sparams, decorated_e, decorated_h
+
+    def fidelity(self, desired_sparams: Union[Dict[Tuple[str, int], np.complex128], Dict[str, np.complex128]],
+                 measure_info: List[Tuple[str, int]] = None) -> Callable:
+        """ Returns the fidelity for the sparams.
+
+        Args:
+            desired_sparams: The desired sparams, provided in dictionary form mapping port to relative magnitude;
+                if not an ndarray and/or not normalized, it is converted to a normalized ndarray.
+            measure_info: Measurement info consisting of a list of port name and mode index pairs (used to index s)
+
+        Returns:
+            The fidelity based on the desired sparams :code:`s`.
+
+        """
+
+        measure_info = [(name, 0) for name in self.port] if measure_info is None else measure_info
+        s = np.zeros(len(measure_info), dtype=np.complex128)
+        for port, weight in desired_sparams.items():
+            key = (port, 0) if isinstance(port, str) else port
+            s[measure_info.index(key)] = weight
+        s = jnp.array(s / np.linalg.norm(s))
+
+        def obj(sparams_fields: Tuple[jnp.ndarray, jnp.ndarray]):
+            sparams, fields = sparams_fields
+            return -jnp.abs(s @ sparams) ** 2, jax.lax.stop_gradient((sparams, fields))
+
+        return obj

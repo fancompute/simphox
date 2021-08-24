@@ -68,7 +68,6 @@ class ModeSolver(FDGrid):
         spacing: Spacing (microns) between each pixel along each axis (must be same dim as `grid_shape`)
         eps: Relative permittivity :math:`\\epsilon_r`
         bloch_phase: Bloch phase (generally useful for angled scattering sims)
-        pml_eps: The permittivity used to scale the PML (should probably assign to 1 for now)
         yee_avg: whether to do a yee average (highly recommended)
     """
 
@@ -87,10 +86,7 @@ class ModeSolver(FDGrid):
         )
 
         self.wavelength = wavelength
-
-    @property
-    def k0(self):
-        return 2 * np.pi / self.wavelength
+        self.k0 = 2 * np.pi / self.wavelength
 
     @property
     def wgm(self) -> sp.spmatrix:
@@ -254,12 +250,12 @@ class ModeLibrary:
         self.o = np.zeros_like(self.modes[0])
 
     @lru_cache()
-    def h(self, mode_idx: int = 0, te_2d: bool = True) -> np.ndarray:
+    def h(self, mode_idx: int = 0, tm_2d: bool = True) -> np.ndarray:
         """Magnetic field :math:`\mathbf{H}` for the mode of specified index
 
         Args:
             mode_idx: The mode index :math:`m \\leq M`
-            te_2d: If the mode is using a 1d distribution, this specifies if the mode is TE (otherwise TM)
+            tm_2d: If the mode is using a 1d distribution, this specifies if the mode is TM (otherwise TE)
 
         Returns:
             :math:`\mathbf{H}_m`, an :code:`ndarray` of the form :code:`(3, X, Y)` for mode :math:`m \\leq M`
@@ -267,7 +263,7 @@ class ModeLibrary:
         """
         mode = self.modes[mode_idx]
         if self.ndim == 1:
-            if te_2d:
+            if tm_2d:
                 mode = np.hstack((self.o, mode, self.o))
             else:
                 mode = np.hstack((1j * self.betas[mode_idx] * mode, self.o,
@@ -275,12 +271,12 @@ class ModeLibrary:
         return self.solver.reshape(mode)
 
     @lru_cache()
-    def e(self, mode_idx: int = 0, te_2d: bool = True) -> np.ndarray:
+    def e(self, mode_idx: int = 0, tm_2d: bool = True) -> np.ndarray:
         """Electric field :math:`\mathbf{E}` for the mode of specified index
 
         Args:
             mode_idx: The mode index :math:`m \\leq M`
-            te_2d: If the mode is using a 1d distribution, this specifies if the mode is TE (otherwise TM)
+            tm_2d: If the mode is using a 1d distribution, this specifies if the mode is TM (otherwise TE)
 
         Returns:
             :math:`\mathbf{E}_m`, an :code:`ndarray` of shape :code:`(3, X, Y, Z)` for mode :math:`m \\leq M`
@@ -290,7 +286,7 @@ class ModeLibrary:
             return self.solver.h2e(self.h(mode_idx), self.betas[mode_idx])
         else:
             mode = self.modes[mode_idx]
-            if te_2d:
+            if tm_2d:
                 mode = np.hstack((1j * self.betas[mode_idx] * mode, self.o,
                                   -(np.roll(mode, -1, axis=0) - mode) / self.solver.cell_sizes[0])) / (
                         1j * self.solver.k0 * self.solver.eps_t.flatten())
@@ -400,7 +396,7 @@ class ModeLibrary:
     def plot_sz(self, ax, idx: int = 0, title: str = "Poynting", include_n: bool = False,
                 title_size: float = 16, label_size=16):
         if idx > self.m - 1:
-            ValueError("Out of range of number of solutions")
+            raise ValueError("Out of range of number of solutions")
         plot_power_2d(ax, np.abs(self.sz(idx).real), self.eps, spacing=self.solver.spacing[0])
         if include_n:
             ax.set_title(rf'{title}, $n_{idx + 1} = {self.n(idx):.4f}$', fontsize=title_size)
@@ -470,20 +466,20 @@ class ModeLibrary:
             x[region[0], region[1]] = self.modes[mode_idx]
         return x
 
-    def measure_fn(self, mode_idx: int = 0, use_jax: bool = False, te_2d: bool = True):
+    def measure_fn(self, mode_idx: int = 0, use_jax: bool = False, tm_2d: bool = True):
         """Measure flux
 
         Args:
             mode_idx: Use the poynting, mode index
             use_jax: Use jax.
-            te_2d: Use TE polarization (only relevant in the case of 2D simulations (i.e., 1D modes))
+            tm_2d: Use TM polarization (only relevant in the case of 2D simulations (i.e., 1D modes))
 
         Returns:
             A function that takes e, h fields and outputs the a and b terms
 
         """
         poynting = poynting_fn(use_jax=use_jax)
-        em, hm = self.e(mode_idx, te_2d=te_2d), self.h(mode_idx, te_2d=te_2d)
+        em, hm = self.e(mode_idx, tm_2d=tm_2d), self.h(mode_idx, tm_2d=tm_2d)
         sm = np.sum(poynting(em, hm))
         xp = jnp if use_jax else np
 
@@ -510,8 +506,8 @@ class ModeDevice:
         """
         self.size = size
         self.spacing = spacing
-        self.nx = int(self.size[0] / spacing)
-        self.ny = int(self.size[1] / spacing)
+        self.nx = np.round(self.size[0] / spacing).astype(int)
+        self.ny = np.round(self.size[1] / spacing).astype(int)
         self.wg_height = wg_height
         self.wg = wg
         self.sub = sub
@@ -526,7 +522,7 @@ class ModeDevice:
             wavelength: Wavelength for the mode solver.
 
         Returns:
-            :code:`Modes` object.
+            :code:`ModeLibrary` object that solves the.
 
         """
         return ModeLibrary(shape=(self.nx, self.ny),
@@ -553,22 +549,25 @@ class ModeDevice:
         wg, sub, dx = self.wg, self.sub, self.spacing
         wg_y = (self.wg_height, self.wg_height + wg.y)
 
-        xr_wg = (center - int(wg.x / 2 / dx), center + int(wg.x / 2 / dx))
+        xr_wg = (center - int(wg.x / 2 / dx), center - int(wg.x / 2 / dx) + np.round(wg.x / dx).astype(int))
         yr_wg = slice(int(wg_y[0] / dx), int(wg_y[1] / dx))
         eps = np.ones((nx, ny))
         eps[:, :int(self.sub.y / dx)] = sub.material.eps
         eps[slice(*xr_wg), yr_wg] = wg.material.eps
-        eps[:, int(self.sub.y / dx):int(self.sub.y / dx) + int(self.rib_y / dx)] = wg.material.eps
+        eps[:, int(self.sub.y / dx):int(self.sub.y / dx) + np.round(self.rib_y / dx).astype(int)] = wg.material.eps
 
         if vert_ps is not None:
             ps_y = (wg.y + self.wg_height + sep, wg.y + self.wg_height + sep + vert_ps.y)
-            xr_ps = slice(center - int(vert_ps.x / 2 / dx), center + int(vert_ps.x / 2 / dx))
+            xr_ps = slice(center - int(vert_ps.x / 2 / dx),
+                          center - int(vert_ps.x / 2 / dx) + np.round(vert_ps.x / dx).astype(int))
             yr_ps = slice(int(ps_y[0] / dx), int(ps_y[1] / dx))
             eps[xr_ps, yr_ps] = vert_ps.material.eps
 
         if lat_ps is not None:
-            xrps_l = slice(xr_wg[0] - int(lat_ps.x / dx) - int(sep / dx), xr_wg[0] - int(sep / dx))
-            xrps_r = slice(xr_wg[1] + int(sep / dx), xr_wg[1] + int(sep / dx) + int(lat_ps.x / dx))
+            xrps_l = slice(xr_wg[0] - np.round(lat_ps.x / dx).astype(int) - int(sep / dx),
+                           xr_wg[0] - int(sep / dx))
+            xrps_r = slice(xr_wg[1] + int(sep / dx),
+                           xr_wg[1] + int(sep / dx) + np.round(lat_ps.x / dx).astype(int))
             eps[xrps_l, yr_wg] = lat_ps.material.eps
             eps[xrps_r, yr_wg] = lat_ps.material.eps
 
@@ -581,7 +580,8 @@ class ModeDevice:
 
         Args:
             gap: coupling gap for the interaction region
-            ps: phase shifter :code:`MaterialBlock`
+            vert_ps: vertical phase shifter :code:`MaterialBlock`
+            lat_ps: lateral phase shifter :code:`MaterialBlock`
             seps: separation between left and right waveguide in the coupler respectively
 
         Returns:

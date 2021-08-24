@@ -28,6 +28,7 @@ class MaterialBlock:
 
 SILICON = Material('Silicon', (0.3, 0.3, 0.3), 3.4784 ** 2)
 POLYSILICON = Material('Poly-Si', (0.5, 0.5, 0.5), 3.4784 ** 2)
+AIR = Material('Air', (0, 0, 0), 1 ** 2)
 OXIDE = Material('Oxide', (0.6, 0, 0), 1.4442 ** 2)
 NITRIDE = Material('Nitride', (0, 0, 0.7), 1.996 ** 2)
 LS_NITRIDE = Material('Low-Stress Nitride', (0, 0.4, 1))
@@ -35,5 +36,8 @@ LT_OXIDE = Material('Low-Temp Oxide', (0.8, 0.2, 0.2), 1.4442 ** 2)
 ALUMINUM = Material('Aluminum', (0, 0.5, 0))
 ALUMINA = Material('Alumina', (0.2, 0, 0.2), 1.75)
 ETCH = Material('Etch', (0, 0, 0))
+
+TEST_ZERO = Material('Zero', (0, 0, 0), 0)
+TEST_ONE = Material('One', (0, 0, 0), 1)
 
 

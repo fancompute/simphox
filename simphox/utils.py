@@ -206,8 +206,20 @@ def pml_params(pos: np.ndarray, t: int, exp_scale: float, log_reflection: float,
     return sigma, alpha
 
 
-def smooth_rho_2d_fn(eta: float, beta: float, radius: float):
-    def smooth_rho(rho: jnp.ndarray):
+def get_smooth_fn(beta: float, radius: float, eta: float = 0.5):
+    """Using the sigmoid function and convolutional kernel provided in jax, we return a function that
+        effectively binarizes the design respectively and smooths the density parameters.
+
+    Args:
+        beta: A multiplicative factor in the tanh function to effectively define how binarized the design should be
+        radius: The radius of the convolutional kernel for smoothing
+        eta: The average value of the design
+
+    Returns:
+        The smoothing function
+
+    """
+    def smooth(rho: jnp.ndarray):
         rr, cc = disk((radius, radius), radius + 1)
         kernel = np.zeros((2 * radius + 1, 2 * radius + 1), dtype=np.float)
         kernel[rr, cc] = 1
@@ -216,114 +228,41 @@ def smooth_rho_2d_fn(eta: float, beta: float, radius: float):
         return jnp.divide(jnp.tanh(beta * eta) + jnp.tanh(beta * (rho - eta)),
                           jnp.tanh(beta * eta) + jnp.tanh(beta * (1 - eta)))
 
-    return smooth_rho
+    return smooth
 
 
-def place_rho_2d_fn(rho_init: jnp.ndarray, box: Union[Box, List[Box]]):
-    """
-
-    Args:
-        rho_init: initial rho definition
-        box: Box or list of Box instances that define position and orientation of the design regions,
-            where the first box is considered the upright-oriented design region
-
-    Returns:
-        The place rho function and initial rho design being optimized
-
-    """
-    boxes = box if isinstance(box, list) else [box]
-    slices = [b.slice for b in boxes]
-    rho_design_init = rho_init[slices[0][0], slices[0][1]]
-
-    def place_rho(rho_design):
-        rho = jnp.array(rho_init)
-        for s in slices:
-            rho = rho.at[s[0], s[1]].set(rho_design)
-        return rho
-
-    return place_rho, rho_design_init
-
-
-def place_rho_2d_fn_temp(rho_init: jnp.ndarray, box: Box, ud_symmetry: bool = False, lr_symmetry: bool = False):
-    """
+def get_place_fn(rho_init: np.ndarray, box: Box, x_symmetry: bool = False, y_symmetry: bool = False):
+    """Given an initial distribution, this transform_fn defines the design region area and the symmetries
+        for the overall simulation via x_symmetry and y_symmetry.
 
     Args:
         rho_init: initial rho definition
         box: Box defines position and orientation of the design region
-        ud_symmetry: up-down symmetry
-        lr_symmetry: left-right symmetry
+        x_symmetry: symmetry along x
+        y_symmetry: symmetry along y
 
     Returns:
 
     """
-    shape = rho_init.shape
     mask = box.mask(rho_init)
-
-    if ud_symmetry and lr_symmetry:
+    if x_symmetry and y_symmetry:
         def place_rho(rho):
-            x, y = shape[0] // 2, shape[1] // 2
-            rho_sym = rho[:x, :y]
-            rho = rho.at[-x:, :y].set(rho_sym[::-1, :])
-            rho = rho.at[-x:, -y:].set(rho_sym[::-1, ::-1])
-            rho = rho.at[:x, -y:].set(rho_sym[:, ::-1])
+            rho = (rho + rho[::-1]) / 2
+            rho = (rho + rho[:, ::-1]) / 2
             return jnp.array(rho_init) * (1 - mask) + rho * mask
-    elif ud_symmetry:
+    elif x_symmetry:
         def place_rho(rho):
-            rho_sym = rho[:, :shape[1] // 2]
-            rho = jnp.hstack((rho_sym, jnp.fliplr(rho_sym)))
+            rho = (rho + rho[::-1]) / 2
             return jnp.array(rho_init) * (1 - mask) + rho * mask
-    elif lr_symmetry:
+    elif y_symmetry:
         def place_rho(rho):
-            rho_sym = rho[:shape[0] // 2, :]
-            rho = jnp.vstack((rho_sym, jnp.flipud(rho_sym)))
+            rho = (rho + rho[:, ::-1]) / 2
             return jnp.array(rho_init) * (1 - mask) + rho * mask
     else:
         def place_rho(rho):
             return jnp.array(rho_init) * (1 - mask) + rho * mask
 
     return place_rho
-
-
-# def match_mode_2d(src: jnp.ndarray, aux: bool = True) -> Callable[[jnp.ndarray], jnp.ndarray]:
-#     """ Returns the mode matching loss given a source
-#
-#     Args:
-#         src: Source profile for calculating mode match integral
-#         aux: Whether to incorporate aux data to keep the field info
-#
-#     Returns:
-#
-#
-#     """
-#     if aux:
-#         def obj(field):
-#             return -jnp.sum(jnp.abs(field.conj() * src.ravel())), jax.lax.stop_gradient(field)
-#     else:
-#         def obj(field):
-#             return -jnp.sum(jnp.abs(field.conj() * src.ravel()))  # want to minimize this to maximize mode match
-#
-#     return obj
-
-
-def fidelity(s: jnp.ndarray) -> Callable:
-    """ Returns the fidelity for the sparams.
-
-    Args:
-        s: The desired sparams; if not an ndarray and/or not normalized, it is converted to a normalized ndarray.
-
-    Returns:
-        The fidelity based on the desired sparams :code:`s`.
-
-    """
-
-    s = np.array(s)
-    s = s / np.linalg.norm(s)
-
-    def obj(sparams_fields: Tuple[jnp.ndarray, jnp.ndarray]):
-        sparams, fields = sparams_fields
-        return s.conj().T @ sparams, jax.lax.stop_gradient((sparams, fields))
-
-    return obj
 
 
 # Real-time splitter metrics

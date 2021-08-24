@@ -46,7 +46,7 @@ class OptProblem:
                     could be smoothing functions, symmetry functions, and more (which can be compounded appropriately).
         cost_fn: The JAX-transformable cost function (or tuple of such functions)
             corresponding to src that takes in output of solve_fn from :code:`opt_solver`.
-        fdfd: FDFD(s) used to generate the solver (FDFD is not run is :code:`fdfd` is :code:`None`)
+        sim: SimGrid(s) used to generate the solver (FDFD is not run is :code:`fdfd` is :code:`None`)
         source: A numpy array source (FDFD is not run is :code:`source` is :code:`None`)
         metrics_fn: A metric_fn that returns useful dictionary data based on fields and FDFD object
          at certain time intervals (specified in opt). Each problem is supplied this metric_fn
@@ -58,6 +58,10 @@ class OptProblem:
     sim: SimGrid
     source: str
     metrics_fn: Optional[Callable[[np.ndarray, SimGrid], Dict]] = None
+
+    def __post_init__(self):
+        self.fn = self.sim.get_sim_sparams_fn(self.source, self.transform_fn)\
+            if self.source is not None else self.transform_fn
 
 
 @dataclasses.dataclass
@@ -91,26 +95,28 @@ class OptViz:
 class OptRecord:
     """An optimization record
 
-        We need an object to hold the history, which includes a list of costs (we avoid the term loss
-        as it may be related to  denoted
+    We need an object to hold the history, which includes a list of costs (we avoid the term loss
+    as it may be related to  denoted
 
-        Args:
-            costs: List of costs
-            params: Params (:math:`\rho`) transformed into the design
-            metrics: An xarray with dimensions :code:`name`, :code:`metric`, :code:`iteration`
-            eps: An xarray with dimensions :code:`name`, :code:`x`, :code:`y`
+    Attributes:
+        costs: List of costs
+        params: Params (:math:`\rho`) transformed into the design
+        metrics: An xarray for metrics with dimensions :code:`name`, :code:`metric`, :code:`iteration`
+        eps: An xarray for relative permittivity with dimensions :code:`name`, :code:`x`, :code:`y`
+        fields: An xarray for a selected field component with dimensions :code:`name`, :code:`x`, :code:`y`
 
     """
     costs: np.ndarray
     params: jnp.ndarray
     metrics: xarray.DataArray
     eps: xarray.DataArray
+    fields: xarray.DataArray
 
 
 def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.ndarray, num_iters: int,
             pbar: Optional[Callable] = None, step_size: float = 1, viz_interval: int = 0, metric_interval: int = 0,
             viz: Optional[OptViz] = None, backend: str = 'cpu',
-            eps_interval: int = 0) -> OptRecord:
+            eps_interval: int = 0, field_interval: int = 0) -> OptRecord:
     """Run the optimization, which can be done over multipe simulations as long as those simulations
     share the same set of params initialized by :code:`init_params`.
 
@@ -129,8 +135,10 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
              are recorded in a given :code:`OptProblem` (default of 0 means do not record anything).
             viz: The :code:`OptViz` object required for visualizing the optimization in real time.
             backend: Recommended backend for :code:`ndim == 2` is :code:`'cpu'` and :code:`ndim == 3` is :code:`'gpu'`
-            eps_interval: Whether to record the parameter metric at the specified :code:`record_interval`.
-                Beware, this can use up a lot of memory so use judiciously.
+            eps_interval: Whether to record the eps at the specified :code:`eps_interval`.
+                Beware, this can use up a lot of memory during the opt so use judiciously.
+            field_interval: Whether to record the field at the specified :code:`field_interval`.
+                Beware, this can use up a lot of memory during the opt so use judiciously.
 
         Returns:
             A tuple of the final eps distribution (:code:`transform_fn(p)`) and parameters :code:`p`
@@ -150,9 +158,8 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
         if not len(viz.simulations_pipes) == len(sim_opt_problems):
             raise ValueError("Number of viz_pipes must match number of opt problems")
 
-    # Define the objective function acting on parameters rho
-    solve_fn = [None if (op.source is None or op.sim is None) else op.sim.get_sim_sparams_fn(op.source, op.transform_fn)
-                for op in opt_problems]
+    # Define the simulation and objective function acting on parameters rho
+    solve_fn = [None if (op.source is None or op.sim is None) else op.fn for op in opt_problems]
 
     def overall_cost_fn(rho: jnp.ndarray):
         evals = [op.cost_fn(s(rho)) if s is not None else op.cost_fn(rho) for op, s in zip(opt_problems, solve_fn)]
@@ -180,19 +187,17 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
         v, opt_state, data = step(i, opt_state)
         if viz_interval > 0 and i % viz_interval == 0:
             _update_eps(opt_state)
-            if viz is not None:
-                for sop, sparams_fields in zip(sim_opt_problems, data):
-                    sim = sop.sim
-                    sparams, fields = sparams_fields
-                    eps_pipe, field_pipe, power_pipe = viz.simulations_pipes[sim.name]
-                    eps_pipe.send((sim.eps.T - np.min(sim.eps)) / (np.max(sim.eps) - np.min(sim.eps)))
-                    hz = np.asarray(fields[-1]).squeeze().T
-                    power = np.abs(hz) ** 2
-                    field_pipe.send(hz.real / np.max(hz.real))
-                    power_pipe.send(power / np.max(power))
-        if metric_interval > 0 and i % metric_interval == 0 and viz is not None:
-            for sop, sparams_fields in zip(sim_opt_problems, data):
-                sparams, _ = sparams_fields
+        for sop, sparams_fields in zip(sim_opt_problems, data):
+            sim = sop.sim
+            sparams, e, h = sim.decorate(*sparams_fields)
+            hz = np.asarray(h[2]).squeeze().T
+            if viz_interval > 0 and i % viz_interval == 0 and viz is not None:
+                eps_pipe, field_pipe, power_pipe = viz.simulations_pipes[sim.name]
+                eps_pipe.send((sim.eps.T - np.min(sim.eps)) / (np.max(sim.eps) - np.min(sim.eps)))
+                field_pipe.send(hz.real / np.max(hz.real))
+                power = np.abs(hz) ** 2
+                power_pipe.send(power / np.max(power))
+            if metric_interval > 0 and i % metric_interval == 0 and viz is not None:
                 metrics = sop.metrics_fn(sparams)
                 for metric_name, metric_value in metrics.items():
                     history[f'{metric_name}/{sop.sim.name}'].append(metric_value)
@@ -209,9 +214,10 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
                             name=title
                         )
                     )
-        if eps_interval > 0 and i % eps_interval == 0:
-            for sop in sim_opt_problems:
+            if eps_interval > 0 and i % eps_interval == 0:
                 history[f'eps/{sop.sim.name}'].append((i, sop.sim.eps))
+            if field_interval > 0 and i % field_interval == 0:
+                history[f'field/{sop.sim.name}'].append((i, hz))
         iterator.set_description(f"𝓛: {v:.5f}")
         costs.append(v)
         if viz is not None:
@@ -242,7 +248,19 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
         dims=['name', 'iteration', 'x', 'y'],
         name='eps'
     ) if sim_opt_problems else []
-    return OptRecord(costs=np.asarray(costs), params=get_params(opt_state), metrics=metrics, eps=eps)
+    fields = xarray.DataArray(
+        data=np.asarray([[field for _, field in history[f'field/{sop.sim.name}']] if field_interval > 0 else []
+                         for sop in sim_opt_problems]),
+        coords={
+            'name': [sop.sim.name for sop in sim_opt_problems],
+            'iteration': [it for it, _ in history[f'field/{sim_opt_problems[0].sim.name}']],
+            'x': np.arange(sim_opt_problems[0].sim.shape[0]),
+            'y': np.arange(sim_opt_problems[0].sim.shape[1]),
+        },
+        dims=['name', 'iteration', 'x', 'y'],
+        name='fields'
+    ) if sim_opt_problems else []
+    return OptRecord(costs=np.asarray(costs), params=get_params(opt_state), metrics=metrics, eps=eps, fields=fields)
 
 
 def opt_viz(opt_problem: Union[OptProblem, List[OptProblem]], metric_config: Dict[str, List[str]]) -> OptViz:

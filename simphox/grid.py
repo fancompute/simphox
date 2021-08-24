@@ -6,7 +6,7 @@ import scipy.sparse as sp
 
 from dphox.component import Pattern, Callable, Port
 
-from .typing import Shape, Dim, GridSpacing, Optional, List, Union, Dict, Tuple
+from .typing import Shape, Dim, Dim3, GridSpacing, Optional, List, Union, Dict, Tuple
 from .utils import curl_fn, yee_avg
 
 
@@ -20,21 +20,21 @@ class Grid:
             eps: Relative permittivity
         """
         self.shape = np.asarray(shape, dtype=np.int)
-        self.spacing = spacing * np.ones(len(shape)) if isinstance(spacing, float) else np.asarray(spacing)
+        self.spacing = spacing * np.ones(len(shape)) if isinstance(spacing, int) or isinstance(spacing, float) else np.asarray(spacing)
         self.ndim = len(shape)
         self.shape3 = np.hstack((self.shape, np.ones((3 - self.ndim,), dtype=self.shape.dtype)))
         self.spacing3 = np.hstack((self.spacing, np.ones((3 - self.ndim,), dtype=self.spacing.dtype) * np.inf))
 
-        if not self.ndim == len(self.spacing):
-            raise AttributeError(f'Require len(grid_shape) == len(grid_spacing) but got'
-                                 f'({len(self.shape)}, {len(self.spacing)})')
+        if not self.ndim == self.spacing.size:
+            raise AttributeError(f'Require shape.size == spacing.size but got '
+                                 f'{self.shape.size} != {self.spacing.size}')
         self.n = np.prod(self.shape)
         self.eps: np.ndarray = np.ones(self.shape) * eps if not isinstance(eps, np.ndarray) else eps
         if not tuple(self.shape) == self.eps.shape:
-            raise AttributeError(f'Require grid_shape == eps.shape but got'
-                                 f'({self.shape}, {self.eps.shape})')
+            raise AttributeError(f'Require grid_shape == eps.shape but got '
+                                 f'{self.shape} != {self.eps.shape}')
         self.size = self.spacing * self.shape
-        self.cell_sizes = [self.spacing[i] * np.ones((self.shape[i],))
+        self.cell_sizes = [(self.spacing[i] * np.ones((self.shape[i],)) if self.ndim > 1 else self.spacing * np.ones(self.shape))
                            if i < self.ndim else np.ones((1,)) for i in range(3)]
         self.pos = [np.hstack((0, np.cumsum(dx))) if dx.size > 1 else np.asarray((0,)) for dx in self.cell_sizes]
         self.components = []
@@ -102,9 +102,9 @@ class Grid:
 
 
         """
-        return np.stack([split_v.reshape(self.shape3) for split_v in np.split(v, 3)]) if v.ndim == 1 else v.flatten()
+        return v.reshape((3, *self.shape3)) if v.ndim == 1 else v.flatten()
 
-    def slice(self, center: Tuple[float, float, float], size: Tuple[float, float, float], squeezed: bool = True):
+    def slice(self, center: Dim3, size: Dim3, squeezed: bool = True):
         """Pick a slide of this grid
 
         Args:
@@ -137,8 +137,7 @@ class Grid:
                 slice(c[1] - s1, c[1] - s1 + shape[1]) if shape[1] > 0 else c1,
                 slice(c[2] - s2, c[2] - s2 + shape[2]) if shape[2] > 0 else c2)
 
-    def view_fn(self, center: Tuple[float, float, float], size: Tuple[float, float, float], use_jax: bool = True,
-                squeezed: bool = False):
+    def view_fn(self, center: Tuple[float, float, float], size: Tuple[float, float, float], use_jax: bool = True):
         """Return a function that views a field at specific region specified by center and size in the grid. This
         is used for mode measurements.
 
@@ -154,7 +153,7 @@ class Grid:
         """
         if np.count_nonzero(size) == 3:
             raise ValueError(f"At least one element of size must be zero, but got {size}")
-        s = self.slice(center, size, squeezed=squeezed)
+        s = self.slice(center, size, squeezed=False)
         xp = jnp if use_jax else np
 
         # Find the view axis (the poynting direction)

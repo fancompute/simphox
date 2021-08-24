@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, List
 
 from .mkl import spsolve_pardiso
 
@@ -18,25 +18,6 @@ def _spsolve_hcb(ab: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]) -> jnp.ndarra
     # caching is not necessary since the pardiso spsolve we are using caches the matrix factorization by default
     # replace with a better solver if available
     return spsolve_pardiso(a, b.flatten())
-
-
-def _spdot_hcb(ab: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]):
-    t, a_entries, b_entries, a_indices, b_indices = ab
-    a = sp.coo_matrix((a_entries * t[a_indices[1]], (a_indices[0], a_indices[1])), shape=(t.size, t.size))
-    b = sp.coo_matrix((b_entries, (b_indices[0], b_indices[1])), shape=(t.size, t.size))
-    c = a.dot(b)
-    c.sort_indices()
-    c = c.tocoo()
-    return c.data, np.stack((np.array(c.row), np.array(c.col)))
-
-
-def _spdot_bwdop_hcb(abg: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray,
-                                jnp.ndarray, jnp.ndarray, jnp.ndarray]) -> jnp.ndarray:
-    t, a_entries, b_entries, g_entries, a_indices, b_indices, g_indices = abg
-    a = sp.coo_matrix((a_entries, (a_indices[0], a_indices[1])), shape=(t.size, t.size))
-    b = sp.coo_matrix((b_entries, (b_indices[0], b_indices[1])), shape=(t.size, t.size))
-    g = sp.coo_matrix((g_entries, (g_indices[0], g_indices[1])), shape=(t.size, t.size))
-    return b.dot(g.T.dot(a)).diagonal()
 
 
 @jax.custom_vjp
@@ -60,31 +41,70 @@ def spsolve_bwd(res, g):
 spsolve.defvjp(spsolve_fwd, spsolve_bwd)
 
 
-class SparseDot:
-    def __init__(self, size):
-        self.size = size
+def _coo_to_jnp(mat):
+    mat.sort_indices()
+    mat = mat.tocoo()
+    return jnp.array(mat.data, dtype=np.complex), jnp.vstack((jnp.array(mat.row), jnp.array(mat.col)))
 
-    def compile_spdot(self):
+
+class TMOperator:
+    """This class generates some helpful TE primitives based on the input discrete derivatives provided by the FDFD
+    class for a 2D problem.
+
+    Attributes:
+        df: A list of forward discrete derivative in order (:code:`df_x`, :code:`df_y`, :code:`df_z`).
+        db: A list of backward discrete derivative in order (:code:`db_x`, :code:`db_y`, :code:`db_z`).
+    """
+    def __init__(self, df: List[sp.spmatrix], db: List[sp.spmatrix]):
+        self.df = df
+        self.db = db
+        data, self.x_indices = _coo_to_jnp(self.df[0] @ self.db[0])
+        data, self.y_indices = _coo_to_jnp(self.df[1] @ self.db[1])
+        self.size = data.size
+        self.n = df[0].diagonal().size
+
+    def compile_operator_along_axis(self, axis: int):
+        """Compiles the TE mode operator along a certain axis (0 or 1)
+
+        Args:
+            axis: Axis along which to compute the operator.
+
+        Returns:
+            The contribution to the TE operator along axis 0 or 1 specified by the input.
+
+        """
+        if axis != 0 and axis != 1:
+            raise ValueError("axis must be either 0 or 1.")
+
+        n = self.n
         size = self.size
+        a = self.df[axis]
+        b = self.db[axis]
+        c_indices = (self.x_indices, self.y_indices)[axis]
+
+        def _te_hcb(t: jnp.ndarray):
+            tm = sp.diags(t)
+            c = a.dot(tm).dot(b)
+            c.sort_indices()
+            c = c.tocoo()
+            return c.data
+
+        def _te_backward_hcb(g: jnp.ndarray) -> jnp.ndarray:
+            g = sp.coo_matrix((g, (c_indices[1], c_indices[0])), shape=(n, n))
+            complex_res = b.dot(g.dot(a)).diagonal()
+            return complex_res.real
 
         @jax.custom_vjp
-        def spdot(t: jnp.ndarray, a_entries: jnp.ndarray, a_indices: jnp.ndarray,
-                  b_entries: jnp.ndarray, b_indices: jnp.ndarray):
-            return hcb.call(_spdot_hcb, (t, a_entries, b_entries, a_indices, b_indices),
-                            result_shape=(jax.ShapeDtypeStruct((size,), np.complex128),
-                                          jax.ShapeDtypeStruct((2, size), np.int32)))
-            # result_shape=(jnp.zeros(size, dtype=np.complex128), jnp.zeros((2, size), dtype=np.int32)))
+        def te(t: jnp.ndarray):
+            return hcb.call(_te_hcb, t, result_shape=jax.ShapeDtypeStruct((size,), np.complex128))
 
-        def spdot_fwd(t: jnp.ndarray, a_entries: jnp.ndarray, a_indices: jnp.ndarray,
-                      b_entries: jnp.ndarray, b_indices: jnp.ndarray):
-            c_entries, c_indices = spdot(t, a_entries, a_indices, b_entries, b_indices, size)
-            return c_entries, (t, c_entries, c_indices, a_entries, a_indices, b_entries, b_indices, size)
+        def te_fwd(t: jnp.ndarray):
+            return te(t), None
 
-        def spdot_bwd(res, g):
-            t, c_entries, c_indices, a_entries, a_indices, b_entries, b_indices, size = res
-            v = hcb.call(_spdot_bwdop_hcb, (a_entries, b_entries, g, a_indices, b_indices, c_indices), result_shape=t)
-            return v, None, None, None, None
+        def te_bwd(_, g):
+            v = hcb.call(_te_backward_hcb, g, result_shape=jax.ShapeDtypeStruct((n,), np.float))
+            return v,
 
-        spdot.defvjp(spdot_fwd, spdot_bwd)
+        te.defvjp(te_fwd, te_bwd)
 
-        return spdot
+        return te

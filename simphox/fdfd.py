@@ -1,5 +1,5 @@
 from .sim import SimGrid
-from .utils import d2curl_op, yee_avg_2d_xy, yee_avg_jax
+from .utils import d2curl_op, yee_avg_jax
 from .typing import Shape, Dim, GridSpacing, Optional, Tuple, Union, SpSolve, Shape2, Dim2, List, Callable, Dict
 
 from functools import lru_cache
@@ -14,7 +14,7 @@ from jax.config import config
 
 from jax.scipy.sparse.linalg import bicgstab
 from .utils import yee_avg_2d_z, curl_fn
-from .primitives import spsolve, SparseDot
+from .primitives import spsolve, TMOperator
 
 try:  # pardiso (using Intel MKL) is much faster than scipy's solver
     from .mkl import spsolve_pardiso, feast_eigs
@@ -186,15 +186,15 @@ class FDFD(SimGrid):
         return self.curl_h(beta)(h) / (1j * self.k0 * self.eps_t)
 
     def solve(self, src: np.ndarray, solver_fn: Optional[SpSolve] = None, reshaped: bool = True,
-              iterative: int = -1, te_2d: bool = True, callback: Optional[Callable] = None) -> np.ndarray:
-        """FDFD e-field Solver
+              iterative: int = -1, tm_2d: bool = True, callback: Optional[Callable] = None) -> np.ndarray:
+        """FDFD Solver
 
         Args:
             src: normalized source (can be wgm or tfsf)
             solver_fn: any function that performs a sparse linalg solve
             reshaped: reshape into the grid shape (instead of vectorized/flattened form)
             iterative: default = -1, direct = 0, gmres = 1, bicgstab
-            te_2d: use the TE polarization (if the simulation is 2D)
+            tm_2d: use the TM polarization (only relevant for 2D, ignored for 3D)
             callback: a function to run during the solve (only applies in 3d iterative solver case, not yet implemented)
 
         Returns:
@@ -210,7 +210,7 @@ class FDFD(SimGrid):
             else:
                 field = solver_fn(self.mat, b) if solver_fn else spsolve_pardiso(self.mat, b)
         elif b.size == self.n:  # assume only the z component
-            mat = self.mat_hz if te_2d else self.mat_ez
+            mat = self.mat_hz if tm_2d else self.mat_ez
             fz = solver_fn(mat, b) if solver_fn else spsolve_pardiso(mat, b)
             o = np.zeros_like(fz)
             field = np.vstack((o, o, fz))
@@ -305,7 +305,7 @@ class FDFD(SimGrid):
         src_sparam_reference = measure_info.index((port_name, mode_idx))
         return s_out / s_in[src_sparam_reference]
 
-    def get_fields_fn(self, src: np.ndarray, transform_fn: Optional[Callable] = None, te_2d: bool = True) -> Callable:
+    def get_fields_fn(self, src: np.ndarray, transform_fn: Optional[Callable] = None, tm_2d: bool = True) -> Callable:
         """Build a fields function of a set of parameters (e.g., density, epsilon, etc.)
         given the source and transform function.
 
@@ -316,7 +316,7 @@ class FDFD(SimGrid):
         Args:
             src: Source for the solver
             transform_fn: Transforms parameters to yield the epsilon parameters used by jax (if None, use identity)
-            te_2d: Whether to solve the TE polarization for this FDFD (only relevant for 2D, ignored for 3D)
+            tm_2d: Whether to solve the TM polarization for this FDFD (only relevant for 2D, ignored for 3D)
 
         Returns:
             A solve function (2d or 3d based on defined :code:`ndim` specified for the instance of :code:`FDFD`)
@@ -336,30 +336,26 @@ class FDFD(SimGrid):
         if self.ndim == 2:
             shape = self.shape
             o = jnp.zeros(self.shape, jnp.complex128)[..., jnp.newaxis]
-            if te_2d:
+            if tm_2d:
                 # exact 2d FDFD for TE polarization
-                df, db = self.df, self.db
                 constant_term = -jnp.ones_like(self.eps.flatten()) * k0 ** 2
                 constant_term_indices = jnp.stack((jnp.arange(self.n), jnp.arange(self.n)))
-                ddx = -db[0] @ df[0]
-                ddy = -db[1] @ df[1]
-                _, ddx_indices = coo_to_jnp(ddx)
-                _, ddy_indices = coo_to_jnp(ddy)
-                db_jnp = (coo_to_jnp(db[0]), coo_to_jnp(db[1]))
-                df_jnp = (coo_to_jnp(df[0]), coo_to_jnp(df[1]))
 
                 # this is temporary while we wait for sparse-sparse support in JAX.
-                spdot = SparseDot(size=ddx.data.size).compile_spdot()
+                operator = TMOperator(self.df, self.db)
+                x_op = operator.compile_operator_along_axis(0)
+                y_op = operator.compile_operator_along_axis(1)
+                x_ind, y_ind = operator.x_indices, operator.y_indices
                 dh = self.diff_fn(use_h=True, use_jax=True)
 
                 @jax.jit
                 def solve(rho: jnp.ndarray):
                     eps_t = yee_avg_jax(transform_fn(rho))
                     eps_x, eps_y = jnp.ravel(eps_t[0]), jnp.ravel(eps_t[1])
-                    ddx_entries, _ = spdot(-1 / eps_x, db_jnp[0][0], db_jnp[0][1], df_jnp[0][0], df_jnp[0][1])
-                    ddy_entries, _ = spdot(-1 / eps_y, db_jnp[1][0], db_jnp[1][1], df_jnp[1][0], df_jnp[1][1])
+                    ddx_entries = x_op(-1 / eps_x)
+                    ddy_entries = y_op(-1 / eps_y)
                     mat_entries = jnp.hstack((constant_term, ddx_entries, ddy_entries))
-                    hz = spsolve(mat_entries, k0 * src, jnp.hstack((constant_term_indices, ddx_indices, ddy_indices)))
+                    hz = spsolve(mat_entries, k0 * src, jnp.hstack((constant_term_indices, x_ind, y_ind)))
                     hz = jnp.reshape(hz, shape)[..., jnp.newaxis]
                     h = jnp.stack((o, o, hz))
                     e = jnp.stack((dh(h[2], 1), -dh(h[2], 0), o)) / (1j * k0 * eps_t)
