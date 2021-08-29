@@ -44,7 +44,7 @@ spsolve.defvjp(spsolve_fwd, spsolve_bwd)
 def _coo_to_jnp(mat):
     mat.sort_indices()
     mat = mat.tocoo()
-    return jnp.array(mat.data, dtype=np.complex), jnp.vstack((jnp.array(mat.row), jnp.array(mat.col)))
+    return jnp.array(mat.data, dtype=np.complex128), jnp.vstack((jnp.array(mat.row), jnp.array(mat.col)))
 
 
 class TMOperator:

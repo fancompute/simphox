@@ -346,7 +346,7 @@ class FDFD(SimGrid):
         def coo_to_jnp(mat: sp.coo_matrix):
             mat.sort_indices()
             mat = mat.tocoo()
-            return jnp.array(mat.data, dtype=np.complex), jnp.vstack((jnp.array(mat.row), jnp.array(mat.col)))
+            return jnp.array(mat.data, dtype=np.complex128), jnp.vstack((jnp.array(mat.row), jnp.array(mat.col)))
 
         if self.ndim < 3:
             shape = self.shape

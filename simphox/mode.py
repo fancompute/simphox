@@ -466,10 +466,10 @@ class ModeLibrary:
         """
         region = grid.slice(center, size)
         if self.ndim == 2:
-            x = np.zeros((3, *grid.shape), dtype=np.complex)
+            x = np.zeros((3, *grid.shape), dtype=np.complex128)
             x[:, region[0], region[1], region[2]] = self.h(mode_idx)
         else:
-            x = np.zeros(grid.shape, dtype=np.complex)
+            x = np.zeros(grid.shape, dtype=np.complex128)
             x[region[0], region[1]] = self.modes[mode_idx]
         return x
 

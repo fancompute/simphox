@@ -60,7 +60,7 @@ class Grid:
             spacing: Spacing (microns) between each pixel along each axis (must be same dim as `grid_shape`)
             eps: Relative permittivity
         """
-        self.shape = np.asarray(shape, dtype=np.int)
+        self.shape = np.asarray(shape, dtype=int)
         self.spacing = spacing * np.ones(len(shape)) if isinstance(spacing, int) or isinstance(spacing, float) else np.asarray(spacing)
         self.ndim = len(shape)
         self.shape3 = np.hstack((self.shape, np.ones((3 - self.ndim,), dtype=self.shape.dtype)))
@@ -207,9 +207,9 @@ class Grid:
         # 1 -> (0, 2, 1)
         # 2 -> (0, 1, 2)
         axes = [
-            np.asarray((1, 2, 0), dtype=np.int),
-            np.asarray((0, 2, 1), dtype=np.int),
-            np.asarray((0, 1, 2), dtype=np.int)
+            np.asarray((1, 2, 0), dtype=int),
+            np.asarray((0, 2, 1), dtype=int),
+            np.asarray((0, 1, 2), dtype=int)
         ][view_axis]
 
         def view(field):
@@ -249,8 +249,8 @@ class YeeGrid(Grid):
             yee_avg: whether to do a yee average (highly recommended)
         """
         super(YeeGrid, self).__init__(shape, spacing, eps)
-        self.pml_shape = np.asarray(pml, dtype=np.int) if isinstance(pml, tuple) else pml
-        self.pml_shape = np.ones(self.ndim, dtype=np.int) * pml if isinstance(pml, int) else pml
+        self.pml_shape = np.asarray(pml, dtype=int) if isinstance(pml, tuple) else pml
+        self.pml_shape = np.ones(self.ndim, dtype=int) * pml if isinstance(pml, int) else pml
         self.pml_params = pml_params
         self.yee_avg = yee_avg
         self.name = name
