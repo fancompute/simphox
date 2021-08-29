@@ -41,22 +41,30 @@ class FDFD(SimGrid):
         at a `single` frequency (wavelength).
 
         The discretized version of Maxwell's equations in frequency domain is:
-        .. math::
-            \nabla \\times \mu^{-1} \nabla \\times \mathbf{e} - k_0^2 \\epsilon \mathbf{e} = k_0 \mathbf{j},
-        which can be written in the form :math:`A \mathbf{e} = \mathbf{b}`, where:
-        .. math::
-            A = \nabla \\times \mu^{-1} \nabla \\times - k_0^2 \\epsilon \\
-            b = k_0 \mathbf{j}
-        is an operator representing the discretized EM wave operator at frequency :math:`omega`.
 
-        Therefore, :math:`\mathbf{e} = A^{-1}\mathbf{b}`.
+        .. math::
+            \\nabla \\times \\mu^{-1} \\nabla \\times \\mathbf{e} - k_0^2 \\epsilon \\mathbf{e} = k_0 \\mathbf{j},
+
+        which can be written in the form :math:`A \\mathbf{e} = \\mathbf{b}`, where:
+
+        .. math::
+            A = \\nabla \\times \\mu^{-1} \\nabla \\times - k_0^2 \\epsilon
+
+            b = k_0 \\mathbf{j}
+
+        is an operator representing the discretized EM wave operator at frequency
+        :math:`\\omega = k_0 = \\frac{2\pi}{\\lambda}`.
+
+        Therefore, :math:`\\mathbf{e} = A^{-1}\\mathbf{b}`.
 
         For 2D simulations, it can be more efficient to solve for just the :math:`z`-component of the fields since
-        only :math:`\mathbf{e}_z` is non-zero. In this case, we can solve a smaller problem to improve the efficiency.
-        The form of this problem is :math:`A_z \mathbf{e}_z = \mathbf{b}_z`, where:
+        only :math:`\\mathbf{e}_z` is non-zero. In this case, we can solve a smaller problem to improve the efficiency.
+        The form of this problem is :math:`A_z \\mathbf{e}_z = \\mathbf{b}_z`, where:
+
         .. math::
-            A = (\nabla \\times \mu^{-1} \nabla \times)_z + k_0^2 \epsilon_z \\
-            \mathbf{b}_z = k_0 \mathbf{j}_z \\
+            A = (\\nabla \\times \\mu^{-1} \\nabla \\times)_z + k_0^2 \\epsilon_z
+
+            \\mathbf{b}_z = k_0 \\mathbf{j}_z
 
     Attributes:
         shape: Tuple of size 1, 2, or 3 representing the number of pixels in the grid
@@ -115,19 +123,21 @@ class FDFD(SimGrid):
 
     @property
     def mat(self) -> sp.csr_matrix:
-        """Build the discrete Maxwell operator :math:`A(k_0)` acting on :math:`\mathbf{e}`.
+        """Build the discrete Maxwell operator :math:`A(k_0)` acting on :math:`\\mathbf{e}`.
 
         Returns:
             Electric field operator :math:`A` for solving Maxwell's equations at frequency :math:`omega`.
         """
-        mat = self.curl_curl - self.k0 ** 2 * sp.diags(self.eps_t.flatten())
+        curl_curl: sp.spmatrix = d2curl_op(self.db) @ d2curl_op(self.df)
+        curl_curl.sort_indices()  # for the solver
+        mat = curl_curl - self.k0 ** 2 * sp.diags(self.eps_t.flatten())
         return mat
 
     A = mat  # alias A (common symbol for FDFD matrix) to mat
 
     @property
     def mat_ez(self) -> sp.csr_matrix:
-        """Build the discrete Maxwell operator :math:`A_z(k_0)` acting on :math:`\mathbf{e}_z` (for 2D problems).
+        """Build the discrete Maxwell operator :math:`A_z(k_0)` acting on :math:`\\mathbf{e}_z` (for 2D problems).
 
         Returns:
             Electric field operator :math:`A_z` for a source with z-polarized e-field.
@@ -140,7 +150,7 @@ class FDFD(SimGrid):
 
     @property
     def mat_hz(self) -> sp.csr_matrix:
-        """Build the discrete Maxwell operator :math:`A_z(k_0)` acting on :math:`\mathbf{h}_z` (for 2D problems).
+        """Build the discrete Maxwell operator :math:`A_z(k_0)` acting on :math:`\\mathbf{h}_z` (for 2D problems).
 
         Returns:
             Electric field operator :math:`A_z` for a source with z-polarized e-field.
@@ -151,40 +161,38 @@ class FDFD(SimGrid):
         return mat
 
     def e2h(self, e: np.ndarray, beta: Optional[float] = None) -> np.ndarray:
-        """
-        Convert magnetic field :math:`\mathbf{e}` to electric field :math:`\mathbf{h}`.
+        """Convert magnetic field :math:`\\mathbf{e}` to electric field :math:`\\mathbf{h}`.
 
-        Usage is: `h = fdfd.e2h(e)`, where `e` is grid-shaped (not flattened)
+        Usage is: :code:`h = fdfd.e2h(e)`, where :code:`e` is grid-shaped (not flattened). If :code:`e` is flattened,
+        this function attempts to reshape it.
 
         Mathematically, this represents rearranging the Maxwell equation in the frequency domain:
         ..math::
-            i \omega \mu \mathbf{h} = \nabla \times \mathbf{e}
+            i \\omega \\mu \\mathbf{h} = \\nabla \times \\mathbf{e}.
 
         Returns:
-            The h-field converted from the e-field
+            The h-field converted from the e-field.
         """
-        e = self.reshape(e) if e.ndim == 2 else e
-        return self.curl_e(beta)(e) / (1j * self.k0)
+        return self.curl_e(beta)(self.reshape(e)) / (1j * self.k0)
 
     def h2e(self, h: np.ndarray, beta: Optional[float] = None) -> np.ndarray:
-        """
-        Convert magnetic field :math:`\mathbf{h}` to electric field :math:`\mathbf{e}`.
+        """Convert magnetic field :math:`\\mathbf{h}` to electric field :math:`\\mathbf{e}`.
 
-        Usage is: `e = fdfd.h2e(h)`, where `h` is grid-shaped (not flattened)
+        Usage is: :code:`e = fdfd.h2e(h)`, where :code:`h` is grid-shaped (not flattened). If :code:`h` is flattened,
+        this function attempts to reshape it.
 
         Mathematically, this represents rearranging the Maxwell equation in the frequency domain:
         ..math::
-            -i \omega \epsilon \mathbf{e} = \nabla \times \mathbf{h}
+            -i \\omega \\epsilon \\mathbf{e} = \\nabla \\times \\mathbf{h}.
 
         Returns:
-            Function to convert h-field to e-field
+            The e-field converted from the h-field.
         """
-        h = self.reshape(h) if h.ndim == 2 else h
-        return self.curl_h(beta)(h) / (1j * self.k0 * self.eps_t)
+        return self.curl_h(beta)(self.reshape(h)) / (1j * self.k0 * self.eps_t)
 
     def solve(self, src: np.ndarray, solver_fn: Optional[SpSolve] = None,
               iterative: int = -1, tm_2d: bool = True, callback: Optional[Callable] = None) -> np.ndarray:
-        """FDFD Solver
+        """Solves the FDFD problem (see class description for math).
 
         Args:
             src: normalized source (can be wgm or tfsf)
@@ -194,7 +202,7 @@ class FDFD(SimGrid):
             callback: a function to run during the solve (only applies in 3d iterative solver case, not yet implemented)
 
         Returns:
-            Electric fields that solve the problem :math:`A\mathbf{e} = \mathbf{b} = i \omega \mathbf{j}`
+            Electric fields that solve the problem :math:`A\\mathbf{e} = \\mathbf{b} = i \\omega \\mathbf{j}`
 
         """
         b = self.k0 * src.flatten()
@@ -248,13 +256,6 @@ class FDFD(SimGrid):
             return 1 + 1j * (exp_scale + 1) * (d_pml ** exp_scale) * log_reflection / (2 * absorption_corr)
 
         return _scpml(pe), _scpml(ph)
-
-    @property
-    @lru_cache()
-    def curl_curl(self) -> sp.spmatrix:
-        curl_curl: sp.spmatrix = d2curl_op(self.db) @ d2curl_op(self.df)
-        curl_curl.sort_indices()  # for the solver
-        return curl_curl
 
     @classmethod
     def from_pattern(cls, component: "Pattern", core_eps: float, clad_eps: float, spacing: float, boundary: Dim,

@@ -5,15 +5,15 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import eigs
 from typing import Tuple
 
-from .grid import YeeGrid
-from .typing import Shape, Dim, GridSpacing, Optional, Union
+from .sim import SimGrid
+from .typing import Shape, Dim, GridSpacing, Optional, Union, Dim3
 from scipy.linalg import solve_banded
 
 
-class BPM(YeeGrid):
+class BPM(SimGrid):
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
                  wavelength: float = 1.55, bloch_phase: Union[Dim, float] = 0.0,
-                 pml: Optional[Union[Shape, Dim]] = None, pml_eps: float = 1.0,
+                 pml: Optional[Union[Shape, Dim]] = None, pml_params: Dim3 = (4, -16, 1),
                  yee_avg: bool = True, no_grad: bool = True):
 
         self.wavelength = wavelength
@@ -26,13 +26,15 @@ class BPM(YeeGrid):
             eps=eps,
             bloch_phase=bloch_phase,
             pml=pml,
-            pml_eps=pml_eps,
+            pml_params=pml_params,
             yee_avg=yee_avg
         )
 
         if self.ndim == 1:
             raise ValueError(f"Simulation dimension ndim must be 2 or 3 but got {self.ndim}.")
         self.init()
+
+        raise NotImplementedError("This class is still WIP")
 
     def init(self, center: Tuple[float, ...] = None, shape: Tuple[float, ...] = None, axis: int = 0):
         # initial scalar fields for fdtd

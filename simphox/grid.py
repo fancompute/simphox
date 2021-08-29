@@ -6,7 +6,7 @@ import scipy.sparse as sp
 import dataclasses
 
 from .typing import Shape, Dim, Dim3, GridSpacing, Optional, List, Union, Dict, Tuple, Op
-from .utils import curl_fn, yee_avg
+from .utils import curl_fn, yee_avg, fix_dataclass_init_docs
 
 
 try:
@@ -16,13 +16,14 @@ except ImportError:
     DPHOX_IMPORTED = False
 
 
+@fix_dataclass_init_docs
 @dataclasses.dataclass
 class Port:
     """Port used in components in DPhox
 
     A port defines the center and angle/orientation in a design.
 
-    Attributes:
+    Args:
         x: x position of the port
         y: y position of the port
         a: angle (orientation) of the port (in degrees)

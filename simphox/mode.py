@@ -38,30 +38,37 @@ class ModeSolver(YeeGrid):
         interferometers (MMIs).
 
         We can solve either the 1d or 2d case using 1 or 2 components of the field respectively.
-        Note that in `simphox` units, we assume $k_0 = \frac{2\pi}{\lambda} = \omega$,
-        letting $c = \epsilon_0 = \mu_0 = 1$ for simplicity. We define the *wavenumber* $\beta_m$ for mode $m$ to be
-        the square root of the eigenvalue (hence the $\beta^2$ terms in the later equations) of $C_{\mathrm{1d}}$ and
-        $C_{\mathrm{2d}}$ for the respective problems.
-
-        ## 1D case
+        Note that in `simphox` units, we assume $k_0 = \\frac{2\\pi}{\\lambda} = \\omega$,
+        letting $c = \\epsilon_0 = \\mu_0 = 1$ for simplicity. We define the *wavenumber* $\\beta_m$ for mode $m$ to be
+        the square root of the eigenvalue (hence the $\beta^2$ terms in the later equations) of $C_{\\mathrm{1d}}$ and
+        $C_{\\mathrm{2d}}$ for the respective problems.
 
         For the 1d case, we consider the case where the simulation is a line cross-section of a 2d grid in the
         $xy$-plane. In that case, we solve for the $z$-component of an $h_z$-polarized mode of the form
-        $\mathbf{h}_m = (0, 0, h_z(y)) e^{-i\beta_m x}$. The solutions for $h_z(y)$ correspond to the simple equation:
+        $\\mathbf{h}_m = (0, 0, h_z(y)) e^{-i\\beta_m x}$. The solutions for $h_z(y)$ correspond to the simple equation:
 
         .. math::
-            \beta^2 h_z = \partial_y^2 h_z + k_0^2 \epsilon_z h_z \\
-            \beta_m^2 \mathbf{h}_{m} = C_{\mathrm{1d}} \mathbf{h}_{m}
+            \\beta^2 h_z = \\partial_y^2 h_z + k_0^2 \\epsilon_z h_z
 
-        ## 2D case
+            \\beta_m^2 \\mathbf{h}_{m} = C_{\\mathrm{1d}} \\mathbf{h}_{m}
 
-        For the 2d case, we cannot make this type of assumption. Instead we solve the frequency-domain Maxwell's equations for the case of $z$-translation symmetry (here, we consider propagation along $z$ instead of $x$ to match convention). This time, we solve for an $\mathbf{h}$-field of the form $\mathbf{h}_m = \mathbf{h}(x, y) e^{-i\beta_m z}$. This is made possible by the following set of coupled differential equations:
+        For the 2d case, we cannot make this type of assumption.
+        Instead we solve the frequency-domain Maxwell's equations for the case of $z$-translation symmetry
+        (here, we consider propagation along $z$ instead of $x$ to match convention).
+        This time, we solve for an $\\mathbf{h}$-field of the form $\\mathbf{h}_m = \\mathbf{h}(x, y) e^{-i\\beta_m z}$.
+        This is made possible by the following set of coupled differential equations:
 
         .. math::
-            \beta^2 h_x &= \partial_x(\partial_x h_x + \partial_y h_y) - \epsilon_y (\epsilon_z^{-1} (\partial_y h_x - \partial_x h_y) + k_0^2) = C_{xy} \begin{bmatrix} h_x \\ h_y\end{bmatrix}\\
-            \beta^2 h_y &= \partial_y(\partial_x h_x + \partial_y h_y) - \epsilon_x (\epsilon_z^{-1} (\partial_x h_y - \partial_y h_x) + k_0^2) = C_{yx} \begin{bmatrix} h_x \\ h_y\end{bmatrix}\\
-            \beta^2 \begin{bmatrix} h_x \\ h_y\end{bmatrix} &= \begin{bmatrix} C_{xy} \\ C_{yx}\end{bmatrix} \begin{bmatrix} h_x \\ h_y\end{bmatrix}\\
-            \beta_m^2 \mathbf{h}_{m} &= C_{\mathrm{2d}} \mathbf{h}_{m}
+            \beta^2 h_x &= \\partial_x(\\partial_x h_x + \\partial_y h_y) - \\epsilon_y (\\epsilon_z^{-1}
+            (\\partial_y h_x - \\partial_x h_y) + k_0^2) = C_{xy} \\begin{bmatrix} h_x \\ h_y\\end{bmatrix}
+
+            \beta^2 h_y &= \\partial_y(\\partial_x h_x + \\partial_y h_y) - \\epsilon_x (\\epsilon_z^{-1}
+            (\\partial_x h_y - \\partial_y h_x) + k_0^2) = C_{yx} \\begin{bmatrix} h_x \\ h_y\\end{bmatrix}
+
+            \beta^2 \\begin{bmatrix} h_x \\ h_y\\end{bmatrix} &= \\begin{bmatrix} C_{xy} \\ C_{yx}\\end{bmatrix}
+            \\begin{bmatrix} h_x \\ h_y\\end{bmatrix}
+
+            \beta_m^2 \\mathbf{h}_{m} &= C_{\\mathrm{2d}} \\mathbf{h}_{m}
 
     Attributes:
         shape: Tuple of size 1, 2, or 3 representing the number of pixels in the grid
@@ -161,9 +168,10 @@ class ModeSolver(YeeGrid):
         Solve for waveguide modes (x-translational symmetry) by finding the eigenvalues of :math:`C`.
 
         .. math::
-            C \mathbf{h}_m = \lambda_m \mathbf{h}_m,
-        where :math:`0 \leq m < M` for the :math:`M` (`num_modes`) modes with the largest wavenumbers
-        (:math:`\beta_m = \sqrt{\lambda_m}`).
+            C \\mathbf{h}_m = \\lambda_m \\mathbf{h}_m,
+
+        where :math:`0 \\leq m < M` for the :math:`M` (`num_modes`) modes with the largest wavenumbers
+        (:math:`\beta_m = \\sqrt{\\lambda_m}`).
 
         Args:
             num_modes: Number of modes
@@ -171,9 +179,8 @@ class ModeSolver(YeeGrid):
             tol: Tolerance of the mode solver
 
         Returns:
-            `num_modes` (:math:`M`) largest propagation constants (:math:`\sqrt{\lambda_m(C)}`)
-            and corresponding modes (:math:`\mathbf{h}_m`) of shape `(num_modes, n)`.
-
+            `num_modes` (:math:`M`) largest propagation constants (:math:`\\sqrt{\\lambda_m(C)}`)
+            and corresponding modes (:math:`\\mathbf{h}_m`) of shape :code:`(num_modes, n)`.
         """
 
         df = self.df

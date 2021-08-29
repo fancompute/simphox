@@ -1,0 +1,9 @@
+name: simphox
+channels:
+  - conda-forge
+dependencies:
+  - python=3.7
+  - numpy
+  - scipy
+  - sphinx-autodoc-typehints
+  - jax

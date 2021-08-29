@@ -10,46 +10,21 @@ import jax.numpy as jnp
 
 
 class FDTD(YeeGrid):
-    """Stateless Finite Difference Time Domain (FDTD) implementation
+    """Stateless Finite Difference Time Domain (FDTD) implementation.
 
-        Notes:
-            The FDTD update consists of updating the fields and auxiliary vectors that comprise the system "state."
+    The FDTD update consists of updating the fields and auxiliary vectors that comprise the system "state." This class
+    ideally makes use of the jit capability of JAX.
 
-            The updates are of the form:
-
-            .. math::
-                \mathbf{E}(t + \mathrm{d}t) &= \mathbf{E}(t) + \mathrm{d}t \\frac{\mathrm{d}\mathbf{E}}{\mathrm{d}t} \\
-                \mathbf{H}(t + \mathrm{d}t) &= \mathbf{H}(t) + \mathrm{d}t \\frac{\mathrm{d}\mathbf{H}}{\mathrm{d}t}
-
-            From Maxwell's equations, we have (for current source :math:`\mathbf{J}(t)`):
-
-            .. math::
-                \\frac{\mathrm{d}\mathbf{E}}{\mathrm{d}t} = \\frac{1}{\\epsilon} \\nabla \\times \mathbf{H}(t) + \mathbf{J}(t) \\
-                \\frac{\mathrm{d}\mathbf{H}}{\mathrm{d}t} = -\\frac{1}{\mu} \\nabla \\times \mathbf{E}(t) + \mathbf{M}(t)
-
-            The recurrent update assumes that :math:`\mu = c = 1, \mathbf{M}(t) = \mathbf{0}` and factors in
-            perfectly-matched layers (PML), which requires storing two additional PML arrays in the system's state
-            vector, namely :math:`\\boldsymbol{\\Psi}_E(t)` and :math:`\\boldsymbol{\\Psi}_H(t)`.
-
-            .. math::
-                \mathbf{\Psi_E}^{(t+1/2)} = \mathbf{b} \mathbf{\Psi_E}^{(t-1/2)} + \\nabla_{\mathbf{c}} \\times \mathbf{H}^{(t)}\\
-                \mathbf{\Psi_H}^{(t + 1)} = \mathbf{b} \mathbf{\Psi_H}^{(t)} + \\nabla_{\mathbf{c}} \\times \mathbf{E}^{(t)} \\
-                \mathbf{E}^{(t+1/2)} = \mathbf{E}^{(t-1/2)} + \\frac{\\Delta t}{\\epsilon} \\left(\\nabla \\times \mathbf{H}^{(t)} + \mathbf{J}^{(t)} + \mathbf{\Psi_E}^{(t+1/2)}\\right)\\
-                \mathbf{H}^{(t + 1)} = \mathbf{H}^{(t)} - \\Delta t \\left(\\nabla \\times \mathbf{E}^{(t+1/2)} + \mathbf{\Psi_H}^{(t + 1)}\\right)
-
-
-            Note, in Einstein notation, the weighted curl operator is given by:
-            :math:`\\nabla_{\mathbf{c}} \\times \mathbf{v} := \epsilon_{ijk} c_j \partial_j v_k`.
-
-        Attributes:
-            shape: shape of the simulation
-            spacing: spacing among the different dimensions
-            eps: epsilon permittivity
-            pml: perfectly matched layers (PML)
-            pml_params: The PML parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
-            use_jax: Whether to use jax
-            name: Name of the simulator
+    Attributes:
+        shape: shape of the simulation
+        spacing: spacing among the different dimensions
+        eps: epsilon permittivity
+        pml: perfectly matched layers (PML)
+        pml_params: The PML parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
+        use_jax: Whether to use jax
+        name: Name of the simulator
     """
+
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
                  pml: Optional[Union[Shape, Dim]] = None, pml_params: Dim3 = (3, -35, 1),
                  use_jax: bool = True, name: str = 'fdtd'):
@@ -73,9 +48,9 @@ class FDTD(YeeGrid):
             self.cpml_be, self.cpml_bh = [b_e[s] for s in self.pml_regions], [b_h[s] for s in self.pml_regions]
             self.cpml_ce, self.cpml_ch = [c_e[s] for s in self.pml_regions], [c_h[s] for s in self.pml_regions]
             if use_jax:
-                self.cpml_be, self.cpml_bh = [jnp.asarray(v) for v in self.cpml_be],\
+                self.cpml_be, self.cpml_bh = [jnp.asarray(v) for v in self.cpml_be], \
                                              [jnp.asarray(v) for v in self.cpml_bh]
-                self.cpml_ce, self.cpml_ch = [jnp.asarray(v) for v in self.cpml_ce],\
+                self.cpml_ce, self.cpml_ch = [jnp.asarray(v) for v in self.cpml_ce], \
                                              [jnp.asarray(v) for v in self.cpml_ch]
             self.xp = jnp if use_jax else np
             self.use_jax = use_jax
@@ -84,15 +59,21 @@ class FDTD(YeeGrid):
         self._curl_e = self.curl_e(use_jax=self.use_jax)
         self._curl_h = self.curl_h(use_jax=self.use_jax)
 
+        raise NotImplementedError("This class is still WIP")
+
     @property
     def zero_state(self):
         """Zero state, the default initial state for the FDTD
 
-        Returns: Hidden state of the form:
-            e: current :math:`\mathbf{E}`
-            h: current :math:`\mathbf{H}`
-            psi_e: current :math:`\\boldsymbol{\\Psi}_E` for CPML updates (otherwise :code:`None`)
-            psi_h: current :math:`\\boldsymbol{\\Psi}_H` for CPML updates (otherwise :code:`None`)
+        Returns:
+            Hidden state of the form:
+                e: current :math:`\mathbf{E}`
+
+                h: current :math:`\mathbf{H}`
+
+                psi_e: current :math:`\\boldsymbol{\\Psi}_E` for CPML updates (otherwise :code:`None`)
+
+                psi_h: current :math:`\\boldsymbol{\\Psi}_H` for CPML updates (otherwise :code:`None`)
 
         """
         # stored fields for fdtd
@@ -105,6 +86,37 @@ class FDTD(YeeGrid):
 
     def step(self, state: State, src: np.ndarray, src_region: np.ndarray) -> State:
         """FDTD step (in the form of an RNNCell)
+
+        Notes:
+            The updates are of the form:
+
+            .. math::
+                \mathbf{E}(t + \mathrm{d}t) &= \mathbf{E}(t) + \mathrm{d}t \\frac{\mathrm{d}\mathbf{E}}{\mathrm{d}t} \\
+                \mathbf{H}(t + \mathrm{d}t) &= \mathbf{H}(t) + \mathrm{d}t \\frac{\mathrm{d}\mathbf{H}}{\mathrm{d}t}
+
+            From Maxwell's equations, we have (for current source :math:`\mathbf{J}(t)`):
+
+            .. math::
+                \\frac{\mathrm{d}\mathbf{E}}{\mathrm{d}t} = \\frac{1}{\\epsilon} \\nabla \\times \mathbf{H}(t) + \mathbf{J}(t)
+
+                \\frac{\mathrm{d}\mathbf{H}}{\mathrm{d}t} = -\\frac{1}{\mu} \\nabla \\times \mathbf{E}(t) + \mathbf{M}(t)
+
+            The recurrent update assumes that :math:`\mu = c = 1, \mathbf{M}(t) = \mathbf{0}` and factors in
+            perfectly-matched layers (PML), which requires storing two additional PML arrays in the system's state
+            vector, namely :math:`\\boldsymbol{\\Psi}_E(t)` and :math:`\\boldsymbol{\\Psi}_H(t)`.
+
+            .. math::
+                \mathbf{\Psi_E}^{(t+1/2)} = \mathbf{b} \mathbf{\Psi_E}^{(t-1/2)} + \\nabla_{\mathbf{c}} \\times \mathbf{H}^{(t)}
+
+                \mathbf{\Psi_H}^{(t + 1)} = \mathbf{b} \mathbf{\Psi_H}^{(t)} + \\nabla_{\mathbf{c}} \\times \mathbf{E}^{(t)}
+
+                \mathbf{E}^{(t+1/2)} = \mathbf{E}^{(t-1/2)} + \\frac{\\Delta t}{\\epsilon} \\left(\\nabla \\times \mathbf{H}^{(t)} + \mathbf{J}^{(t)} + \mathbf{\Psi_E}^{(t+1/2)}\\right)
+
+                \mathbf{H}^{(t + 1)} = \mathbf{H}^{(t)} - \\Delta t \\left(\\nabla \\times \mathbf{E}^{(t+1/2)} + \mathbf{\Psi_H}^{(t + 1)}\\right)
+
+
+            Note, in Einstein notation, the weighted curl operator is given by:
+            :math:`\\nabla_{\mathbf{c}} \\times \mathbf{v} := \epsilon_{ijk} c_j \partial_j v_k`.
 
         Args:
             state: current state of the form :code:`(e, h, psi_e, psi_h)`
@@ -174,7 +186,7 @@ class FDTD(YeeGrid):
         return state
 
     def _cpml(self, ax: int, alpha_max: float = 0, exp_scale: float = 3,
-             kappa: float = 1, log_reflection: float = 35) -> Tuple[np.ndarray, np.ndarray]:
+              kappa: float = 1, log_reflection: float = 35) -> Tuple[np.ndarray, np.ndarray]:
         if self.cell_sizes[ax].size == 1:
             return np.ones(2), np.ones(2)
         sigma, alpha = pml_params(self.pos[ax], t=self.pml_shape[ax], exp_scale=exp_scale,

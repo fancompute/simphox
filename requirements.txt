@@ -2,8 +2,6 @@ numpy
 scipy
 matplotlib
 shapely
-gdspy
 descartes
-nazca
 jax
 dphox

@@ -1,6 +1,6 @@
 from collections import defaultdict
 
-from .fdfd import FDFD
+from .utils import fix_dataclass_init_docs
 from .sim import SimGrid
 from .typing import Optional, Callable, Union, List, Tuple, Dict
 
@@ -25,6 +25,7 @@ from .viz import scalar_metrics_viz
 config.parse_flags_with_absl()
 
 
+@fix_dataclass_init_docs
 @dataclasses.dataclass
 class OptProblem:
     """An optimization problem
@@ -64,6 +65,7 @@ class OptProblem:
             if self.source is not None else self.transform_fn
 
 
+@fix_dataclass_init_docs
 @dataclasses.dataclass
 class OptViz:
     """An optimization visualization object
@@ -91,6 +93,7 @@ class OptViz:
     metrics_pipes: Optional[Dict[str, Dict[str, "Pipe"]]] = None
 
 
+@fix_dataclass_init_docs
 @dataclasses.dataclass
 class OptRecord:
     """An optimization record
@@ -117,31 +120,33 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
             pbar: Optional[Callable] = None, step_size: float = 1, viz_interval: int = 0, metric_interval: int = 0,
             viz: Optional[OptViz] = None, backend: str = 'cpu',
             eps_interval: int = 0, field_interval: int = 0) -> OptRecord:
-    """Run the optimization, which can be done over multipe simulations as long as those simulations
-    share the same set of params initialized by :code:`init_params`.
+    """Run the optimization.
 
-        Args:
-            opt_problem: An :code:`OptProblem` or list of :code:`OptProblem`'s. If a list is provided,
-                the optimization optimizes the sum of all objective functions.
-                If the user wants to weight the objective functions, weights must be inlcuded in the objective function
-                definition itself, but we may provide support for this feature at a later time if needed.
-            init_params: Initial parameters for the optimizer (:code:`eps` if :code:`None`)
-            num_iters: Number of iterations to run
-            pbar: Progress bar to keep track of optimization progress with ideally a simple tqdm interface
-            step_size: For the Adam update, specify the step size needed.
-            viz_interval: The optimization intermediate results are recorded every :code:`record_interval` steps
-                (default of 0 means do not visualize anything)
-            metric_interval: The interval over which a recorded object (e.g. metric, param)
-             are recorded in a given :code:`OptProblem` (default of 0 means do not record anything).
-            viz: The :code:`OptViz` object required for visualizing the optimization in real time.
-            backend: Recommended backend for :code:`ndim == 2` is :code:`'cpu'` and :code:`ndim == 3` is :code:`'gpu'`
-            eps_interval: Whether to record the eps at the specified :code:`eps_interval`.
-                Beware, this can use up a lot of memory during the opt so use judiciously.
-            field_interval: Whether to record the field at the specified :code:`field_interval`.
-                Beware, this can use up a lot of memory during the opt so use judiciously.
+    The optimization can be done over multiple simulations as long as those simulations
+    share the same set of params provided by :code:`init_params`.
 
-        Returns:
-            A tuple of the final eps distribution (:code:`transform_fn(p)`) and parameters :code:`p`
+    Args:
+        opt_problem: An :code:`OptProblem` or list of :code:`OptProblem`'s. If a list is provided,
+            the optimization optimizes the sum of all objective functions.
+            If the user wants to weight the objective functions, weights must be inlcuded in the objective function
+            definition itself, but we may provide support for this feature at a later time if needed.
+        init_params: Initial parameters for the optimizer (:code:`eps` if :code:`None`)
+        num_iters: Number of iterations to run
+        pbar: Progress bar to keep track of optimization progress with ideally a simple tqdm interface
+        step_size: For the Adam update, specify the step size needed.
+        viz_interval: The optimization intermediate results are recorded every :code:`record_interval` steps
+            (default of 0 means do not visualize anything)
+        metric_interval: The interval over which a recorded object (e.g. metric, param)
+         are recorded in a given :code:`OptProblem` (default of 0 means do not record anything).
+        viz: The :code:`OptViz` object required for visualizing the optimization in real time.
+        backend: Recommended backend for :code:`ndim == 2` is :code:`'cpu'` and :code:`ndim == 3` is :code:`'gpu'`
+        eps_interval: Whether to record the eps at the specified :code:`eps_interval`.
+            Beware, this can use up a lot of memory during the opt so use judiciously.
+        field_interval: Whether to record the field at the specified :code:`field_interval`.
+            Beware, this can use up a lot of memory during the opt so use judiciously.
+
+    Returns:
+        A tuple of the final eps distribution (:code:`transform_fn(p)`) and parameters :code:`p`
 
     """
 

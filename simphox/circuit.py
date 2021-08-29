@@ -11,7 +11,7 @@ from .fdfd import FDFD
 class Component:
     def __init__(self, structure: Union[Pattern, Multilayer], model: Union[xr.DataArray, Callable[[jnp.ndarray],
                                                                                                   xr.DataArray]], name: str):
-        """
+        """A component in a circuit
 
         Args:
             structure: Structure
@@ -33,9 +33,10 @@ class Component:
 
         Args:
             pattern: component provided by DPhox
-            core_eps: core epsilon (in the pattern region_
+            core_eps: core epsilon
             clad_eps: clad epsilon
             spacing: spacing required
+            wavelengths: wavelengths
             boundary: boundary size around component
             pml: PML size (see :code:`FDFD` class for details)
             name: component name
@@ -92,6 +93,14 @@ class Component:
         )
 
         return cls(pattern, model=model, name=name)
+
+
+def t_to_s_matrix(t: jnp.ndarray):
+    o = jnp.zeros_like(t)
+    return jnp.block(
+        [o, t],
+        [t.T, o]
+    )
 
 
 def dc(epsilon):

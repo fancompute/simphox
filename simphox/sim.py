@@ -6,7 +6,7 @@ from .grid import YeeGrid
 from .mode import ModeSolver, ModeLibrary
 from .typing import GridSpacing, Shape, Union, Dim, Optional, List, Tuple, Shape2, Dim2, Dict, Dim3, Callable, \
     MeasureInfo, Op, PortLabel
-
+from .utils import fix_dataclass_init_docs
 from .viz import get_extent_2d
 
 try:
@@ -22,6 +22,7 @@ import dataclasses
 import xarray as xr
 
 
+@fix_dataclass_init_docs
 @dataclasses.dataclass
 class SimCrossSection:
     io: ModeLibrary
