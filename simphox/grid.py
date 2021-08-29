@@ -321,23 +321,23 @@ class YeeGrid(Grid):
         return _diff
 
     def curl_e(self, beta: Optional[float] = None, use_jax: bool = False) -> Op:
-        """Get the curl of the electric field :math:`\mathbf{E}`
+        """Get the curl of the electric field :math:`\\mathbf{E}`
 
         Args:
-            e: electric field :math:`\mathbf{E}`
+            e: electric field :math:`\\mathbf{E}`
             beta: Propagation constant in the z direction (note: x, y are the `cross section` axes)
 
         Returns:
-            The discretized curl :math:`\\nabla \times \mathbf{E}`
+            The discretized curl :math:`\\nabla \\times \\mathbf{E}`
 
         """
         return curl_fn(self.diff_fn(use_h=False, use_jax=use_jax), use_jax=use_jax, beta=beta)
 
     def curl_h(self, beta: Optional[float] = None, use_jax: bool = False) -> Op:
-        """Get the curl of the magnetic field :math:`\mathbf{H}`
+        """Get the curl of the magnetic field :math:`\\mathbf{H}`
 
            Args:
-               h: magnetic field :math:`\mathbf{H}`
+               h: magnetic field :math:`\\mathbf{H}`
                beta: Propagation constant in the z direction (note: x, y are the `cross section` axes)
 
            Returns:

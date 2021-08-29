@@ -9,8 +9,8 @@ from .fdfd import FDFD
 
 
 class Component:
-    def __init__(self, structure: Union[Pattern, Multilayer], model: Union[xr.DataArray, Callable[[jnp.ndarray],
-                                                                                                  xr.DataArray]], name: str):
+    def __init__(self, structure: Union[Pattern, Multilayer],
+                 model: Union[xr.DataArray, Callable[[jnp.ndarray], xr.DataArray]], name: str):
         """A component in a circuit
 
         Args:

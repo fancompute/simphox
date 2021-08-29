@@ -1,7 +1,5 @@
 numpy
 scipy
 matplotlib
-shapely
-descartes
 jax
-dphox
+scikit-image

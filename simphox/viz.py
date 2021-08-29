@@ -1,6 +1,5 @@
-import k3d
 import numpy as np
-from typing import Union, Dict
+from typing import Dict
 
 import xarray
 from .typing import Tuple, Optional, List
@@ -14,6 +13,12 @@ try:
 except ImportError:
     HOLOVIEWS_IMPORTED = False
 
+try:
+    K3D_IMPORTED = True
+    import k3d
+    from k3d import Plot
+except:
+    K3D_IMPORTED = False
 
 from matplotlib import colors as mcolors
 
@@ -112,7 +117,7 @@ def plot_power_2d(ax, power: np.ndarray, eps: Optional[np.ndarray] = None, spaci
     ax.imshow(power.T, cmap=cmap, origin='lower', alpha=alpha, extent=extent)
 
 
-def plot_power_3d(plot: k3d.Plot, power: np.ndarray, eps: Optional[np.ndarray] = None, axis: int = 0,
+def plot_power_3d(plot: "Plot", power: np.ndarray, eps: Optional[np.ndarray] = None, axis: int = 0,
                   spacing: float = 1, color_range: Tuple[float, float] = None, alpha: float = 100,
                   samples: float = 1200):
     """Plot the 3d power in a notebook given the fields :math:`E` and :math:`H`.
@@ -130,9 +135,12 @@ def plot_power_3d(plot: k3d.Plot, power: np.ndarray, eps: Optional[np.ndarray] =
     Returns:
 
     """
+
+    if not K3D_IMPORTED:
+        raise ImportError("Need to install k3d for this function to work.")
+
     power = power[axis] if power.ndim == 4 else power
     color_range = (0, np.max(power) / 2) if color_range is None else color_range
-
 
     if eps is not None:
         plot_eps_3d(plot, eps, spacing=spacing)  # use defaults for now
@@ -152,7 +160,7 @@ def plot_power_3d(plot: k3d.Plot, power: np.ndarray, eps: Optional[np.ndarray] =
     plot += power_volume
 
 
-def plot_field_3d(plot: k3d.Plot, field: np.ndarray, eps: Optional[np.ndarray] = None, axis: int = 1,
+def plot_field_3d(plot: "Plot", field: np.ndarray, eps: Optional[np.ndarray] = None, axis: int = 1,
                   imag: bool = False, spacing: float = 1,
                   alpha: float = 100, samples: float = 1200, color_range: Tuple[float, float] = None):
     """
@@ -171,6 +179,10 @@ def plot_field_3d(plot: k3d.Plot, field: np.ndarray, eps: Optional[np.ndarray] =
     Returns:
 
     """
+
+    if not K3D_IMPORTED:
+        raise ImportError("Need to install k3d for this function to work.")
+
     field = field[axis] if field.ndim == 4 else field
     field = field.imag if imag else field.real
     color_range = np.asarray((0, np.max(field)) if color_range is None else color_range)
@@ -221,7 +233,7 @@ def plot_field_3d(plot: k3d.Plot, field: np.ndarray, eps: Optional[np.ndarray] =
     # plot += field_volume
 
 
-def plot_eps_3d(plot: k3d.Plot, eps: Optional[np.ndarray] = None, spacing: float = 1,
+def plot_eps_3d(plot: "Plot", eps: Optional[np.ndarray] = None, spacing: float = 1,
                 color_range: Tuple[float, float] = None, alpha: float = 100, samples: float = 1200):
     """
 
@@ -236,6 +248,9 @@ def plot_eps_3d(plot: k3d.Plot, eps: Optional[np.ndarray] = None, spacing: float
     Returns:
 
     """
+
+    if not K3D_IMPORTED:
+        raise ImportError("Need to install k3d for this function to work.")
 
     color_range = (1, np.max(eps)) if color_range is None else color_range
 
@@ -255,21 +270,20 @@ def plot_eps_3d(plot: k3d.Plot, eps: Optional[np.ndarray] = None, spacing: float
 
 
 def scalar_metrics_viz(metric_config: Dict[str, List[str]]):
-    if HOLOVIEWS_IMPORTED:
-        metrics_pipe = {title: Pipe(data=xarray.DataArray(
-            data=np.asarray([[] for _ in metric_config[title]]),
-            coords={
-                'metric': metric_config[title],
-                'iteration': np.arange(0)
-            },
-            dims=['metric', 'iteration'],
-            name=title
-        )) for title in metric_config}
-        metrics_dmaps = [
-            hv.DynamicMap(lambda data: hv.Dataset(data).to(hv.Curve, kdims=['iteration']).overlay('metric'),
-                          streams=[metrics_pipe[title]]).opts(opts.Curve(framewise=True, shared_axes=False, title=title))
-            for title in metric_config
-        ]
-        return pn.Row(*metrics_dmaps), metrics_pipe
-    else:
+    if not HOLOVIEWS_IMPORTED:
         raise ImportError("Holoviews not imported, cannot visualize")
+    metrics_pipe = {title: Pipe(data=xarray.DataArray(
+        data=np.asarray([[] for _ in metric_config[title]]),
+        coords={
+            'metric': metric_config[title],
+            'iteration': np.arange(0)
+        },
+        dims=['metric', 'iteration'],
+        name=title
+    )) for title in metric_config}
+    metrics_dmaps = [
+        hv.DynamicMap(lambda data: hv.Dataset(data).to(hv.Curve, kdims=['iteration']).overlay('metric'),
+                      streams=[metrics_pipe[title]]).opts(opts.Curve(framewise=True, shared_axes=False, title=title))
+        for title in metric_config
+    ]
+    return pn.Row(*metrics_dmaps), metrics_pipe
