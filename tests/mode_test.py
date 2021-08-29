@@ -1,7 +1,7 @@
-from typing import Tuple
-
 from simphox.mode import ModeDevice, ModeSolver, ModeLibrary
 from simphox.material import TEST_ONE, TEST_ZERO, MaterialBlock, SILICON, AIR
+from simphox.typing import Dim2
+
 import pytest
 import numpy as np
 
@@ -48,9 +48,9 @@ np.random.seed(0)
         ])),
     ],
 )
-def test_single_eps_matches_expected(core: Tuple[float, float], sub: Tuple[float, float], size: Tuple[float, float],
-                                     wg_height: float, spacing: float, rib_y: float, lat_ps: Tuple[float, float],
-                                     vert_ps: Tuple[float, float], sep: float, expected: np.ndarray):
+def test_single_eps_matches_expected(core: Dim2, sub: Dim2, size: Dim2,
+                                     wg_height: float, spacing: float, rib_y: float, lat_ps: Dim2,
+                                     vert_ps: Dim2, sep: float, expected: np.ndarray):
     device = ModeDevice(MaterialBlock(core, TEST_ZERO), MaterialBlock(sub, TEST_ONE),
                         size, wg_height, spacing, rib_y)
     lat_ps = MaterialBlock(lat_ps, TEST_ZERO) if lat_ps is not None else None
@@ -72,10 +72,9 @@ def test_single_eps_matches_expected(core: Tuple[float, float], sub: Tuple[float
         ])),
     ],
 )
-def test_coupled_eps_matches_expected(core: Tuple[float, float], sub: Tuple[float, float], size: Tuple[float, float],
-                                      wg_height: float, spacing: float, rib_y: float, lat_ps: Tuple[float, float],
-                                      vert_ps: Tuple[float, float], gap: float,
-                                      seps: Tuple[float, float], expected: np.ndarray):
+def test_coupled_eps_matches_expected(core: Dim2, sub: Dim2, size: Dim2, wg_height: float, spacing: float,
+                                      rib_y: float, lat_ps: Dim2, vert_ps: Dim2, gap: float,
+                                      seps: Dim2, expected: np.ndarray):
     device = ModeDevice(MaterialBlock(core, TEST_ZERO), MaterialBlock(sub, TEST_ONE),
                         size, wg_height, spacing, rib_y)
     lat_ps = MaterialBlock(lat_ps, TEST_ZERO) if lat_ps is not None else None
@@ -87,24 +86,18 @@ def test_coupled_eps_matches_expected(core: Tuple[float, float], sub: Tuple[floa
 @pytest.mark.parametrize(
     "core, sub, size, wg_height, spacing, rib_y, lat_ps, vert_ps, gap, seps, expected_max, expected_mean",
     [
-        ((0.2, 0.4), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, (0.2, 0.2), None, 0.2, (0.2, 0.4), 0.456573 + 0j, 0.044715 + 0j),
-        ((0.2, 0.4), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, None, None, 0.2, (0, 0), 0.658336 + 0j, 0.034605 + 0j),
-        ((0.2, 0.4), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, None, (0.2, 0.2), 0.2, (0.2, 0.4), 0.65787 + 0j, 0.034798 + 0j),
+        ((0.2, 0.4), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, (0.2, 0.2), None, 0.2, (0.2, 0.4), 0.456573, 0.044715),
+        ((0.2, 0.4), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, None, None, 0.2, (0, 0), 0.658336, 0.034605),
+        ((0.2, 0.4), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, None, (0.2, 0.2), 0.2, (0.2, 0.4), 0.65787, 0.034798),
     ],
 )
-def test_mode_matches_expected_max_mean(core: Tuple[float, float], sub: Tuple[float, float], size: Tuple[float, float],
-                                        wg_height: float, spacing: float, rib_y: float, lat_ps: Tuple[float, float],
-                                        vert_ps: Tuple[float, float], gap: float, seps: Tuple[float, float],
-                                        expected_max: complex, expected_mean: complex):
-    device = ModeDevice(MaterialBlock(core, SILICON), MaterialBlock(sub, AIR),
-                        size, wg_height, spacing, rib_y)
+def test_mode_matches_expected_max_mean(core: Dim2, sub: Dim2, size: Dim2, wg_height: float, spacing: float,
+                                        rib_y: float, lat_ps: Dim2, vert_ps: Dim2, gap: float, seps: Dim2,
+                                        expected_max: float, expected_mean: float):
+    device = ModeDevice(MaterialBlock(core, SILICON), MaterialBlock(sub, AIR), size, wg_height, spacing, rib_y)
     lat_ps = MaterialBlock(lat_ps, SILICON) if lat_ps is not None else None
     vert_ps = MaterialBlock(vert_ps, SILICON) if vert_ps is not None else None
     eps = device.coupled(gap=gap, lat_ps=lat_ps, seps=seps, vert_ps=vert_ps)
     actual = device.solve(eps).modes[0]
     np.testing.assert_allclose(np.max(actual), expected_max, atol=1e-6)
     np.testing.assert_allclose(np.mean(actual), expected_mean, atol=1e-6)
-
-
-if __name__ == '__main__':
-    pytest.main()

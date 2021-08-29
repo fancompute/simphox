@@ -11,6 +11,13 @@ from .fdfd import FDFD
 class Component:
     def __init__(self, structure: Union[Pattern, Multilayer], model: Union[xr.DataArray, Callable[[jnp.ndarray],
                                                                                                   xr.DataArray]], name: str):
+        """
+
+        Args:
+            structure: Structure
+            model: Model
+            name: Name of the component
+        """
         self.structure = structure
         self.model = model
         self.name = name

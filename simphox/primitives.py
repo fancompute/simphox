@@ -56,11 +56,10 @@ class TMOperator:
         db: A list of backward discrete derivative in order (:code:`db_x`, :code:`db_y`, :code:`db_z`).
     """
     def __init__(self, df: List[sp.spmatrix], db: List[sp.spmatrix]):
-        self.df = df
-        self.db = db
-        data, self.x_indices = _coo_to_jnp(self.df[0] @ self.db[0])
-        data, self.y_indices = _coo_to_jnp(self.df[1] @ self.db[1])
-        self.size = data.size
+        self.df, self.db = df, db
+        data_x, self.x_indices = _coo_to_jnp(self.df[0] @ self.db[0])
+        data_y, self.y_indices = _coo_to_jnp(self.df[1] @ self.db[1])
+        self.size = (data_x.size, data_y.size)
         self.n = df[0].diagonal().size
 
     def compile_operator_along_axis(self, axis: int):
@@ -77,9 +76,9 @@ class TMOperator:
             raise ValueError("axis must be either 0 or 1.")
 
         n = self.n
-        size = self.size
-        a = self.df[axis]
-        b = self.db[axis]
+        size = self.size[axis]
+        a = self.db[axis]
+        b = self.df[axis]
         c_indices = (self.x_indices, self.y_indices)[axis]
 
         def _te_hcb(t: jnp.ndarray):

@@ -1,4 +1,4 @@
-from .grid import FDGrid
+from .grid import YeeGrid
 from .material import MaterialBlock
 from .typing import Shape, Dim, GridSpacing, Optional, Tuple, Union, List, Callable
 from .utils import poynting_fn, overlap, SMALL_NUMBER
@@ -29,7 +29,7 @@ from logging import getLogger
 logger = getLogger()
 
 
-class ModeSolver(FDGrid):
+class ModeSolver(YeeGrid):
     """FDFD-based waveguide mode solver
 
     Notes:
@@ -251,14 +251,14 @@ class ModeLibrary:
 
     @lru_cache()
     def h(self, mode_idx: int = 0, tm_2d: bool = True) -> np.ndarray:
-        """Magnetic field :math:`\mathbf{H}` for the mode of specified index
+        """Magnetic field :math:`\\mathbf{H}` for the mode of specified index
 
         Args:
             mode_idx: The mode index :math:`m \\leq M`
             tm_2d: If the mode is using a 1d distribution, this specifies if the mode is TM (otherwise TE)
 
         Returns:
-            :math:`\mathbf{H}_m`, an :code:`ndarray` of the form :code:`(3, X, Y)` for mode :math:`m \\leq M`
+            :math:`\\mathbf{H}_m`, an :code:`ndarray` of the form :code:`(3, X, Y)` for mode :math:`m \\leq M`
 
         """
         mode = self.modes[mode_idx]
@@ -272,14 +272,14 @@ class ModeLibrary:
 
     @lru_cache()
     def e(self, mode_idx: int = 0, tm_2d: bool = True) -> np.ndarray:
-        """Electric field :math:`\mathbf{E}` for the mode of specified index
+        """Electric field :math:`\\mathbf{E}` for the mode of specified index
 
         Args:
             mode_idx: The mode index :math:`m \\leq M`
             tm_2d: If the mode is using a 1d distribution, this specifies if the mode is TM (otherwise TE)
 
         Returns:
-            :math:`\mathbf{E}_m`, an :code:`ndarray` of shape :code:`(3, X, Y, Z)` for mode :math:`m \\leq M`
+            :math:`\\mathbf{E}_m`, an :code:`ndarray` of shape :code:`(3, X, Y, Z)` for mode :math:`m \\leq M`
 
         """
         if self.ndim == 2:
@@ -296,13 +296,13 @@ class ModeLibrary:
 
     @lru_cache()
     def sz(self, mode_idx: int = 0) -> np.ndarray:
-        """Poynting vector :math:`\mathbf{S}_z` for the mode of specified index
+        """Poynting vector :math:`\\mathbf{S}_z` for the mode of specified index
 
         Args:
             mode_idx: The mode index :math:`m \\leq M`
 
         Returns:
-            :math:`\mathbf{S}_{m, z}`, the z-component of Poynting vector (correspoding to power),
+            :math:`\\mathbf{S}_{m, z}`, the z-component of Poynting vector (correspoding to power),
             of shape :code:`(X, Y)`
 
         """
@@ -330,10 +330,10 @@ class ModeLibrary:
     @property
     @lru_cache()
     def hs(self):
-        """An array for the magnetic fields `\mathbf{H}` corresponding to all :math:`M` modes
+        """An array for the magnetic fields `\\mathbf{H}` corresponding to all :math:`M` modes
 
         Returns:
-           :math:`\mathbf{H}`, an :code:`ndarray` of shape :code:`(M, 3, X, Y)`
+           :math:`\\mathbf{H}`, an :code:`ndarray` of shape :code:`(M, 3, X, Y)`
         """
         hs = []
         for mode in self.modes:
@@ -356,10 +356,10 @@ class ModeLibrary:
     @property
     @lru_cache()
     def szs(self):
-        """An array for the magnetic fields `\mathbf{S}_z` corresponding to all :math:`M` modes
+        """An array for the magnetic fields `\\mathbf{S}_z` corresponding to all :math:`M` modes
 
         Returns:
-           :math:`\mathbf{S}_z`, an :code:`ndarray` of shape :code:`(M, X, Y)`
+           :math:`\\mathbf{S}_z`, an :code:`ndarray` of shape :code:`(M, X, Y)`
         """
         szs = []
         for e, h in zip(self.es, self.hs):
@@ -443,7 +443,7 @@ class ModeLibrary:
     def overlap_fundamental(self, other_sol: "ModeLibrary"):
         return overlap(self.e(), self.h(), other_sol.e(), other_sol.h()) ** 2
 
-    def place(self, mode_idx: int, grid: FDGrid, center: Dim, size: Dim) -> np.ndarray:
+    def place(self, mode_idx: int, grid: YeeGrid, center: Dim, size: Dim) -> np.ndarray:
         """Place at mode_idx in device with :math:`shape` and :math:`region`.
 
         Args:

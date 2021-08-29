@@ -3,11 +3,51 @@ from functools import lru_cache
 import jax.numpy as jnp
 import numpy as np
 import scipy.sparse as sp
+import dataclasses
 
-from dphox.component import Pattern, Callable, Port
-
-from .typing import Shape, Dim, Dim3, GridSpacing, Optional, List, Union, Dict, Tuple
+from .typing import Shape, Dim, Dim3, GridSpacing, Optional, List, Union, Dict, Tuple, Op
 from .utils import curl_fn, yee_avg
+
+
+try:
+    DPHOX_IMPORTED = True
+    from dphox.component import Pattern
+except ImportError:
+    DPHOX_IMPORTED = False
+
+
+@dataclasses.dataclass
+class Port:
+    """Port used in components in DPhox
+
+    A port defines the center and angle/orientation in a design.
+
+    Attributes:
+        x: x position of the port
+        y: y position of the port
+        a: angle (orientation) of the port (in degrees)
+        w: the width of the port (optional, specified in design, mostly used for simulation)
+        z: z position of the port (optional)
+        h: the height of the port (optional, not specified in design, mostly used for simulation)
+    """
+    x: float
+    y: float
+    a: float = 0
+    w: float = 0
+    z: float = 0
+    h: float = 0
+
+    def __post_init__(self):
+        self.xy = (self.x, self.y)
+        self.xya = (self.x, self.y, self.a)
+        self.xyz = (self.x, self.y, self.z)
+        self.center = np.array(self.xyz)
+
+    @property
+    def size(self):
+        if np.mod(self.a, 90) != 0:
+            raise ValueError(f"Require angle to be a multiple a multiple of 90 but got {self.a}")
+        return np.array((self.w, 0, self.h)) if np.mod(self.a, 180) != 0 else np.array((0, self.w, self.h))
 
 
 class Grid:
@@ -65,7 +105,7 @@ class Grid:
             self.eps = np.ones_like(self.eps) * eps
         return self
 
-    def add(self, component: Pattern, eps: float, zmin: float = None, thickness: float = None) -> "Grid":
+    def add(self, component: "Pattern", eps: float, zmin: float = None, thickness: float = None) -> "Grid":
         """Add a component to the grid
 
         Args:
@@ -87,9 +127,8 @@ class Grid:
         else:
             zidx = (int(zmin / self.spacing[0]), int((zmin + thickness) / self.spacing[1]))
             self.eps[mask == 1, zidx[0]:zidx[1]] = eps
-        self.port = {port_name: port for port_name, port in component.port.items()}
-        self.port_thickness = 0 if thickness is None else thickness
-        self.port_height = 0 if thickness is None else zmin + thickness / 2
+        self.port = {port_name: Port(*port.xya, port.w, zmin + thickness / 2, thickness)
+                     for port_name, port in component.port.items()}
         return self
 
     def reshape(self, v: np.ndarray) -> np.ndarray:
@@ -182,12 +221,21 @@ class Grid:
 
         return view
 
+    def get_expand_3d_fn(self, use_jax=False):
+        xp = jnp if use_jax else np
+        if self.ndim == 1:
+            return lambda x: xp.squeeze(x)[..., xp.newaxis, xp.newaxis]
+        elif self.ndim == 2:
+            return lambda x: xp.squeeze(x)[..., xp.newaxis]
+        else:
+            return lambda x: x
 
-class FDGrid(Grid):
+
+class YeeGrid(Grid):
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
                  bloch_phase: Union[Dim, float] = 0.0, pml: Optional[Union[int, Shape, Dim]] = None,
-                 pml_eps: float = 1.0, yee_avg: int = 1, name: str = 'simgrid'):
-        """The base :code:`SimGrid` class (adding things to :code:`Grid` like Yee grid support, Bloch phase,
+                 pml_params: Dim3 = (4, -16, 1.0), yee_avg: int = 1, name: str = 'simgrid'):
+        """The base :code:`YeeGrid` class (adding things to :code:`Grid` like Yee grid support, Bloch phase,
         PML shape, etc.).
 
         Args:
@@ -196,13 +244,13 @@ class FDGrid(Grid):
             eps: Relative permittivity :math:`\\epsilon_r`
             bloch_phase: Bloch phase (generally useful for angled scattering sims)
             pml: Perfectly matched layer (PML) of thickness on both sides of the form :code:`(x_pml, y_pml, z_pml)`
-            pml_eps: The permittivity used to scale the PML (should probably assign to 1 for now)
+            pml_params: The parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
             yee_avg: whether to do a yee average (highly recommended)
         """
-        super(FDGrid, self).__init__(shape, spacing, eps)
+        super(YeeGrid, self).__init__(shape, spacing, eps)
         self.pml_shape = np.asarray(pml, dtype=np.int) if isinstance(pml, tuple) else pml
         self.pml_shape = np.ones(self.ndim, dtype=np.int) * pml if isinstance(pml, int) else pml
-        self.pml_eps = pml_eps
+        self.pml_params = pml_params
         self.yee_avg = yee_avg
         self.name = name
         self.field_shape = np.hstack((3, self.shape))
@@ -245,9 +293,9 @@ class FDGrid(Grid):
             dx, _ = self._dxes
             d = [sp.diags([-1, 1, b[ax]], [0, 1, -n + 1], shape=(n, n))
                  if n > 1 else 0 for ax, n in enumerate(s)]  # get single axis forward-derivs
-        d = [sp.kron(d[0], sp.eye(s[1] * s[2])),
-             sp.kron(sp.kron(sp.eye(s[0]), d[1]), sp.eye(s[2])),
-             sp.kron(sp.eye(s[0] * s[1]), d[2])]  # tile over the other axes using sp.kron
+        d = [sp.kron(d[0], sp.eye(s[1] * s[2])).astype(np.complex128),
+             sp.kron(sp.kron(sp.eye(s[0]), d[1]), sp.eye(s[2])).astype(np.complex128),
+             sp.kron(sp.eye(s[0] * s[1]), d[2]).astype(np.complex128)]  # tile over the other axes using sp.kron
         d = [sp.diags(1 / dx[ax].ravel()) @ d[ax] for ax in range(len(s))]  # scale by dx (incl pml)
 
         return d
@@ -271,7 +319,7 @@ class FDGrid(Grid):
                 return (xp.roll(f, -1, axis=a) - f) / dx[a]
         return _diff
 
-    def curl_e(self, beta: Optional[float] = None, use_jax: bool = False) -> Callable[[np.ndarray], np.ndarray]:
+    def curl_e(self, beta: Optional[float] = None, use_jax: bool = False) -> Op:
         """Get the curl of the electric field :math:`\mathbf{E}`
 
         Args:
@@ -284,7 +332,7 @@ class FDGrid(Grid):
         """
         return curl_fn(self.diff_fn(use_h=False, use_jax=use_jax), use_jax=use_jax, beta=beta)
 
-    def curl_h(self, beta: Optional[float] = None, use_jax: bool = False) -> Callable[[np.ndarray], np.ndarray]:
+    def curl_h(self, beta: Optional[float] = None, use_jax: bool = False) -> Op:
         """Get the curl of the magnetic field :math:`\mathbf{H}`
 
            Args:
@@ -297,25 +345,26 @@ class FDGrid(Grid):
         """
         return curl_fn(self.diff_fn(use_h=True, use_jax=use_jax), use_jax=use_jax, beta=beta)
 
-    def pml_safe_placement(self, x: float, y: float, safe_threshold: float = 0.1) -> Tuple[float, float]:
-        """ Specifies a placement that is safe from the PML region / edge of the simulation.
+    def pml_safe_placement(self, x: float, y: float, z: float) -> Dim3:
+        """ Specifies a source/ measurement placement that is safe from the PML region / edge of the simulation.
 
         Args:
             x: Input x location
             y: Input y location
-            safe_threshold: Safe threshold to place the point from the PML region
+            z: Input z location
 
         Returns:
-            New x, y tuple that is safe from PML (at least :code:`safe_threshold` away from the PML in simulation units).
+            New x, y, z tuple that is safe from PML (at least one Yee grid point away from the pml region).
 
         """
-        pml = self.pml_shape * self.spacing + safe_threshold
+        pml = (self.pml_shape + 1) * self.spacing if self.pml_shape is not None else (0, 0)
         maxx, maxy = self.size[:2]
         new_x = min(max(x, pml[0]), maxx - pml[0])
         new_y = min(max(y, pml[1]), maxy - pml[1])
-        return new_x, new_y
+        return new_x, new_y, z
 
     @property
     @lru_cache()
     def eps_t(self):
-        return yee_avg(self.eps, shift=self.yee_avg) if self.yee_avg > 0 else np.stack((self.eps, self.eps, self.eps))
+        expand_3d = self.get_expand_3d_fn()
+        return yee_avg(expand_3d(self.eps), shift=self.yee_avg)

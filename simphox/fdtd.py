@@ -3,13 +3,13 @@ from functools import lru_cache
 import numpy as np
 from typing import Tuple, List, Callable
 
-from .grid import FDGrid
-from .typing import Shape, Dim, GridSpacing, Optional, Union, Source, State
+from .grid import YeeGrid
+from .typing import Shape, Dim, GridSpacing, Optional, Union, Source, State, Dim3
 from .utils import pml_params, curl_fn, yee_avg
 import jax.numpy as jnp
 
 
-class FDTD(FDGrid):
+class FDTD(YeeGrid):
     """Stateless Finite Difference Time Domain (FDTD) implementation
 
         Notes:
@@ -41,19 +41,22 @@ class FDTD(FDGrid):
             Note, in Einstein notation, the weighted curl operator is given by:
             :math:`\\nabla_{\mathbf{c}} \\times \mathbf{v} := \epsilon_{ijk} c_j \partial_j v_k`.
 
-        Args:
+        Attributes:
             shape: shape of the simulation
             spacing: spacing among the different dimensions
             eps: epsilon permittivity
             pml: perfectly matched layers (PML)
-            gpu: use the GPU to accelerate the computation
+            pml_params: The PML parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
+            use_jax: Whether to use jax
+            name: Name of the simulator
     """
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
-                 pml: Optional[Union[Shape, Dim]] = None, use_jax: bool = True, name: str = 'fdtd'):
-        super(FDTD, self).__init__(shape, spacing, eps, pml=pml, name=name)
+                 pml: Optional[Union[Shape, Dim]] = None, pml_params: Dim3 = (3, -35, 1),
+                 use_jax: bool = True, name: str = 'fdtd'):
+        super(FDTD, self).__init__(shape, spacing, eps, pml=pml, pml_params=pml_params, name=name)
         self.dt = 1 / np.sqrt(np.sum(1 / self.spacing ** 2))  # includes courant condition!
 
-        # pml (internal to the grid, so specified here!)
+        # pml (internal to the grid / does not affect params, so specified here!)
         if self.pml_shape is not None:
             b, c = zip(*[self._cpml(ax) for ax in range(3)])
             b_e, c_e = [b[ax][0] for ax in range(3)], [c[ax][0] for ax in range(3)]
@@ -175,7 +178,7 @@ class FDTD(FDGrid):
         if self.cell_sizes[ax].size == 1:
             return np.ones(2), np.ones(2)
         sigma, alpha = pml_params(self.pos[ax], t=self.pml_shape[ax], exp_scale=exp_scale,
-                                  log_reflection=log_reflection, absorption_corr=1)
+                                  log_reflection=-log_reflection, absorption_corr=1)
         alpha *= alpha_max  # alpha_max recommended to be np.pi * central_wavelength / 5 if nonzero
         b = np.exp(-(alpha + sigma / kappa) * self.dt)
         factor = sigma / (sigma + alpha * kappa) if alpha_max > 0 else 1

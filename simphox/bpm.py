@@ -5,12 +5,12 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import eigs
 from typing import Tuple
 
-from .grid import FDGrid
+from .grid import YeeGrid
 from .typing import Shape, Dim, GridSpacing, Optional, Union
 from scipy.linalg import solve_banded
 
 
-class BPM(FDGrid):
+class BPM(YeeGrid):
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
                  wavelength: float = 1.55, bloch_phase: Union[Dim, float] = 0.0,
                  pml: Optional[Union[Shape, Dim]] = None, pml_eps: float = 1.0,

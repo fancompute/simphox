@@ -2,6 +2,7 @@ import pytest
 from jax import vjp
 import jax.numpy as jnp
 from jax.config import config
+import jax.test_util as jtu
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import spsolve as spsolve_scipy
@@ -61,5 +62,31 @@ def test_spsolve_vjp_mat(mat: sp.spmatrix, v: np.ndarray, g: np.ndarray, expecte
     np.testing.assert_allclose(vjp_fun(g), expected)
 
 
-if __name__ == '__main__':
-    pytest.main()
+@pytest.mark.parametrize(
+    "mat, v",
+    [
+        (sp.spdiags(np.array([[1, 2, 3, 4, 5], [6, 5, 8, 9, 10]]), [0, 1], 5, 5),
+         np.ones(5, dtype=np.complex128)),
+    ],
+)
+def test_spsolve_numerical_grads_mat(mat: sp.spmatrix, v: np.ndarray):
+    mat = mat.tocoo()
+    mat_entries = jnp.array(mat.data, dtype=np.complex128)
+    mat_indices = jnp.vstack((jnp.array(mat.row), jnp.array(mat.col)))
+    f = lambda x: jnp.sum(spsolve(x, jnp.asarray(v), mat_indices).real)
+    jtu.check_grads(f, (mat_entries,), order=1, modes=['rev'])
+
+
+@pytest.mark.parametrize(
+    "mat1, mat2, v",
+    [
+        (sp.spdiags(np.array([[1, 2, 3, 4, 5], [6, 5, 8, 9, 10]]), [0, 1], 5, 5),
+         sp.spdiags(np.array([[6, 5, 8, 9, 10], [1, 2, 3, 4, 5]]), [0, 1], 5, 5),
+         np.ones(5, dtype=np.complex128)),
+    ],
+)
+def test_tmoperator_grads(mat1: sp.spmatrix, mat2: sp.spmatrix, v: np.ndarray):
+    operator = TMOperator([mat1, mat2], [mat2, mat1])
+    op = operator.compile_operator_along_axis(axis=0)
+    f = lambda x: jnp.sum(op(x)).real
+    jtu.check_grads(f, (v,), order=1, modes=['rev'])

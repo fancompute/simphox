@@ -1,12 +1,11 @@
-from collections import Callable
-
 import jax
 import numpy as np
 import jax.numpy as jnp
 
-from .grid import FDGrid
+from .grid import YeeGrid
 from .mode import ModeSolver, ModeLibrary
-from .typing import GridSpacing, Shape, Union, Dim, Optional, List, Tuple, Shape2, Dim2, Dict, Dim3, Iterable, Array
+from .typing import GridSpacing, Shape, Union, Dim, Optional, List, Tuple, Shape2, Dim2, Dict, Dim3, Callable, \
+    MeasureInfo, Op, PortLabel
 
 from .viz import get_extent_2d
 
@@ -32,11 +31,17 @@ class SimCrossSection:
     def place(self, mode_idx, grid) -> np.ndarray:
         return self.io.place(mode_idx, grid, self.center, self.size)
 
+    def gaussian(self):
+        raise NotImplementedError
 
-class SimGrid(FDGrid):
+    def cw(self):
+        raise NotImplementedError
+
+
+class SimGrid(YeeGrid):
     def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
                  bloch_phase: Union[Dim, float] = 0.0, pml: Optional[Union[int, Shape, Dim]] = None,
-                 pml_eps: float = 1.0, yee_avg: int = 1, use_jax: bool = False, name: str = 'simgrid'):
+                 pml_params: Dim3 = (4, -16, 1.0), yee_avg: int = 1, use_jax: bool = False, name: str = 'simgrid'):
         """The base :code:`SimGrid` class (adding things to :code:`Grid` like Yee grid support, Bloch phase,
         PML shape, etc.).
 
@@ -46,10 +51,10 @@ class SimGrid(FDGrid):
             eps: Relative permittivity :math:`\\epsilon_r`
             bloch_phase: Bloch phase (generally useful for angled scattering sims)
             pml: Perfectly matched layer (PML) of thickness on both sides of the form :code:`(x_pml, y_pml, z_pml)`
-            pml_eps: The permittivity used to scale the PML (should probably assign to 1 for now)
+            pml_params: The parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
             yee_avg: whether to do a yee average (highly recommended)
         """
-        super(SimGrid, self).__init__(shape, spacing, eps, bloch_phase, pml, pml_eps, yee_avg, name)
+        super(SimGrid, self).__init__(shape, spacing, eps, bloch_phase, pml, pml_params, yee_avg, name)
         self.use_jax = use_jax
 
     def modes(self, center: Dim3, size: Dim3, wavelength: float = 1.55, num_modes: int = 1) -> SimCrossSection:
@@ -70,24 +75,22 @@ class SimGrid(FDGrid):
         )
         return SimCrossSection(modes, center, size)
 
-    # def eigenmode_source(self, center: Tuple[float, ...], size: Tuple[float, ...],
-    #                      axis: int = 0, wavelength: float = 1.55, mode_idx: int = 0, gpu: bool = False):
-    #     """For waveguide-related problems or shining light into a photonic port, an eigenmode source is used.
-    #
-    #     Args:
-    #         grid: simulation grid (e.g., :code:`FDFD`, :code:`FDTD`, :code:`BPM`)
-    #         center: center tuple of the form :code:`(x, y, z)`
-    #         size: size of the source
-    #         axis: axis for normal vector of cross-section (one of :code:`(0, 1, 2)`)
-    #         wavelength: wavelength (arb. units, should match with spacing)
-    #         mode_idx: mode index for the eigenmode for source profile
-    #         gpu: place source on the GPU
-    #
-    #     Returns:
-    #         Eigenmode source function and region (:code:`slice` object or mask)
-    #     """
-    #     profile, region = self.profile(center, size, axis, wavelength, mode_idx)
-    #     return cw_source_fn(profile, wavelength, gpu), region
+    def mode_source(self, center: Dim, size: Dim, wavelength: float = 1.55, mode_idx: int = 0):
+        """For waveguide-related problems or shining light into a photonic port, an eigenmode source is used.
+
+        Args:
+            center: center tuple of the form :code:`(x, y, z)`
+            size: size of the source
+            axis: axis for normal vector of cross-section (one of :code:`(0, 1, 2)`)
+            wavelength: wavelength (arb. units, should match with spacing)
+            mode_idx: mode index for the eigenmode for source profile
+            gpu: place source on the GPU
+
+        Returns:
+            Eigenmode source function and region (:code:`slice` object or mask)
+        """
+        sim_xs = self.modes(center, size, wavelength, num_modes=mode_idx + 1)
+        return cw_source_fn(profile, wavelength, gpu), region
     #
     # def cw_source(self, profile: np.ndarray, wavelength: float, t: float, dt: float) -> np.ndarray:
     #     """CW source array
@@ -123,7 +126,7 @@ class SimGrid(FDGrid):
     #     """CW source function
     #
     #     Args:
-    #         profile: Profile :mode:`\mathbf{\\Psi}` (e.g. mode or TFSF) for the input source
+    #         profile: Profile :math:`\mathbf{\\Psi}` (e.g. mode or TFSF) for the input source
     #         wavelength: Wavelength for CW source
     #         gpu: place source on the gpu
     #
@@ -177,34 +180,8 @@ class SimGrid(FDGrid):
     #     src = self.gaussian_source(profiles, pulse_width, center_wavelength, dt, t0, linear_chirp)
     #     return lambda tt: src[tt // dt]
 
-    def port_to_center_size(self, profile_size_factor: float = 2) -> Tuple[Dict[str, Dim3], Dict[str, Dim3]]:
-        """Returns a dictionary from each port to the center of size used for port excitations.
-
-        Args:
-            profile_size_factor: Factor to rescale the mode view slice compared to the port
-
-        Returns:
-            a dictionary from each port to the center of size used for port excitations.
-
-        """
-
-        port_to_axis = {name: np.mod(self.port[name].a, np.pi) != 0 for name in self.port}
-        port_to_size = {}
-        port_to_center = {}
-
-        # Get the size for each port
-        for name, p in self.port.items():
-            if port_to_axis[name] == 0:
-                port_to_size[name] = (0, p.w * profile_size_factor, self.port_thickness * profile_size_factor)
-            else:
-                port_to_size[name] = (p.w * profile_size_factor, 0, self.port_thickness * profile_size_factor)
-            x, y = self.pml_safe_placement(p.x, p.y)
-            port_to_center[name] = (x, y, self.port_height * profile_size_factor)
-
-        return port_to_center, port_to_size
-
     def port_modes(self, excitation: List[Tuple[str, int]] = None,
-                   profile_size_factor: float = 2) -> Dict[str, SimCrossSection]:
+                   profile_size_factor: float = 2) -> Dict[PortLabel, SimCrossSection]:
         """Profile for all the ports in the grid (always assumed to be along x or y axes!).
 
         Args:
@@ -218,9 +195,8 @@ class SimGrid(FDGrid):
         """
 
         excitation = [(port, 0) for port in self.port] if excitation is None else excitation
-        port_to_center, port_to_size = self.port_to_center_size(profile_size_factor)
 
-        return {name: self.modes(center=port_to_center[name], size=port_to_size[name],
+        return {name: self.modes(center=self.pml_safe_placement(*p.xyz), size=p.size * profile_size_factor,
                                  num_modes=np.max([mode_idx
                                                    for port_name, mode_idx in excitation if port_name == name]) + 1)
                 for name, p in self.port.items()}
@@ -248,7 +224,8 @@ class SimGrid(FDGrid):
         source = {(port, 0): weight for port, weight in zip(ports, source)} if isinstance(source, tuple) else source
         source_library = self.port_modes(profile_size_factor=profile_size_factor)
 
-        def prepare_source(port_mode: Tuple[str, int], weight: complex):
+        sources_to_sum = []
+        for port_mode, weight in source.items():
             axis = int(np.mod(self.port[port_mode[0]].a, np.pi) == np.pi / 2)
             beta = source_library[port_mode[0]].io.betas[port_mode[1]]
             shift = 2 * (np.mod(self.port[port_mode[0]].a, 2 * np.pi) < np.pi) - 1
@@ -256,12 +233,12 @@ class SimGrid(FDGrid):
             src = np.roll(src, axis=axis, shift=2 * shift)
             if unidirectional:
                 src += np.roll(src, axis=axis, shift=shift) * np.exp(-1j * self.spacing[axis] * beta - 1j * np.pi)
-            return src
+            sources_to_sum.append(src)
 
-        return sum([prepare_source(port_mode, weight) for port_mode, weight in source.items()])
+        return sum(sources_to_sum) if sources_to_sum else np.array([])
 
-    def get_measure_fn(self, measure_info: List[Tuple[str, int]] = None,
-                       profile_size_factor: float = 2, use_jax: bool = False, tm_2d: bool = True):
+    def get_measure_fn(self, measure_info: Optional[MeasureInfo] = None,
+                       profile_size_factor: float = 2, use_jax: bool = False, tm_2d: bool = True) -> Op:
         """Measure function: measure the fields using the Modes object provided for each port
 
         Args:
@@ -283,7 +260,7 @@ class SimGrid(FDGrid):
         # We measure polarity, which is the orientation of the measurement interface
         # to determine whether the wave is entering or leaving the device
         # The polarity below assumes that ports are near edge of simulation.
-        polarity = 2 * (np.mod(angles, 2 * np.pi) < np.pi).astype(np.int) - 1
+        polarity = 2 * (np.mod(angles, 360) < 180).astype(np.int) - 1
         measure_fns = [port_to_modes[port_name].io.measure_fn(m, use_jax, tm_2d=tm_2d) for port_name, m in measure_info]
         view_fns = [self.view_fn(port_to_modes[port_name].center, port_to_modes[port_name].size, use_jax)
                     for port_name, _ in measure_info]
@@ -351,7 +328,7 @@ class SimGrid(FDGrid):
 
     def get_sim_sparams_fn(self, port_name: Optional[str] = None, transform_fn: Optional[Callable] = None,
                            mode_idx: int = 0, profile_size_factor: int = 2,
-                           measure_info: Optional[List[Tuple[str, int]]] = None, tm_2d: bool = True) -> Callable:
+                           measure_info: Optional[MeasureInfo] = None, tm_2d: bool = True) -> Callable:
         """Returns a function that measures the sparams and fields.
 
         We first initialize the optimization problem solver given a JAX-transformable transform function
@@ -440,7 +417,7 @@ class SimGrid(FDGrid):
                 raise ValueError('Must define x, y inputs since the port width and/or locations'
                                  'are not automatically discoverable.')
             port = list(self.port.values())[0]
-            slab_x, slab_y = self.pml_safe_placement(*port.xy)
+            slab_x, slab_y, _ = self.pml_safe_placement(*port.xyz)
             if np.mod(port.a, np.pi) == 0:
                 slab_x, slab_y = (int(slab_x / self.spacing[0]), (int((slab_y - port.w) / self.spacing[1]),
                                                                   int((slab_y + port.w) / self.spacing[1])))
@@ -468,12 +445,10 @@ class SimGrid(FDGrid):
             name=self.name
         )
         sim.port = self.port
-        sim.port_thickness = 0
-        sim.port_height = 0
         return sim
 
-    def decorate(self, sparams: np.ndarray, fields: np.ndarray):
-        """Decorates the :code:`sparams` and :code:`fields` using :code:`xr.DataArray`
+    def decorate(self, sparams: np.ndarray, fields: np.ndarray) -> Tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+        """Decorates the :code:`sparams` and :code:`fields` using :code:`xarray.DataArray`
 
         Args:
             sparams: The sparams resulting from a call to the returned callable from :code:`get_sim_sparams_fn`
