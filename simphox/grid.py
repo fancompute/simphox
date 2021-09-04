@@ -179,7 +179,7 @@ class Grid:
             The reshaped array
 
         """
-        return v.reshape(self.field_shape)
+        return v.reshape((3, *self.shape3))
 
     def slice(self, center: Size3, size: Size3, squeezed: bool = True):
         """Pick a slide of this grid

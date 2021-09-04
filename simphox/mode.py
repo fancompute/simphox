@@ -17,6 +17,7 @@ except OSError:  # if mkl isn't installed
 
 try:
     from dphox.component import Pattern
+
     DPHOX_INSTALLED = True
 except ImportError:
     DPHOX_INSTALLED = False
@@ -293,6 +294,7 @@ class ModeLibrary:
         wavelength: The wavelength for the modes.
         num_modes: Number of modes that should be solved.
     """
+
     def __init__(self, size: Size, spacing: GridSpacing, eps: Union[float, np.ndarray],
                  wavelength: float = 1.55, num_modes: int = 1):
         self.solver = ModeSolver(
@@ -326,7 +328,8 @@ class ModeLibrary:
                 mode = np.hstack((self.o, mode, self.o))
             else:
                 mode = np.hstack((1j * self.betas[mode_idx] * mode, self.o,
-                                  -(mode - np.roll(mode, 1, axis=0)) / self.solver.cell_sizes[0])) / (1j * self.solver.k0)
+                                  -(mode - np.roll(mode, 1, axis=0)) / self.solver.cell_sizes[0])) / (
+                               1j * self.solver.k0)
         return self.solver.reshape(mode)
 
     @lru_cache()
@@ -341,16 +344,17 @@ class ModeLibrary:
             :math:`\\mathbf{E}_m`, an :code:`ndarray` of shape :code:`(3, X, Y, Z)` for mode :math:`m \\leq M`
 
         """
-        if self.ndim == 1:
+        if self.ndim == 2:
+            return self.solver.h2e(self.h(mode_idx), self.betas[mode_idx])
+        else:
             mode = self.modes[mode_idx]
             if tm_2d:
                 mode = np.hstack((1j * self.betas[mode_idx] * mode, self.o,
                                   -(np.roll(mode, -1, axis=0) - mode) / self.solver.cell_sizes[0])) / (
-                        1j * self.solver.k0 * self.solver.eps_t.flatten())
+                               1j * self.solver.k0 * self.solver.eps_t.flatten())
             else:
                 mode = np.hstack((self.o, mode, self.o))
             return self.solver.reshape(mode)
-        return self.solver.h2e(self.h(mode_idx), self.betas[mode_idx])
 
     @lru_cache()
     def sz(self, mode_idx: int = 0) -> np.ndarray:
@@ -516,7 +520,6 @@ class ModeLibrary:
         """
         poynting = poynting_fn(use_jax=use_jax)
         em, hm = self.e(mode_idx, tm_2d=tm_2d), self.h(mode_idx, tm_2d=tm_2d)
-        print(em.shape, hm.shape)
         sm = np.sum(poynting(em, hm))
         xp = jnp if use_jax else np
 
