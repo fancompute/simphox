@@ -1,15 +1,136 @@
 import numpy as np
 import scipy.sparse as sp
-import jax.ops
+import dataclasses
 import jax.numpy as jnp
 
 from typing import Tuple, Union, Optional
 from copy import deepcopy
 import xarray as xr
 
-from .typing import List, Callable, Dim2
+from .typing import List, Callable, Size2, Size, Size3
 
 SMALL_NUMBER = 1e-20
+
+
+def fix_dataclass_init_docs(cls):
+    """Fix the ``__init__`` documentation for a :class:`dataclasses.dataclass`.
+
+    :param cls: The class whose docstring needs fixing
+    :returns: The class that was passed so this function can be used as a decorator
+
+    .. seealso:: https://github.com/agronholm/sphinx-autodoc-typehints/issues/123
+    """
+    cls.__init__.__qualname__ = f'{cls.__name__}.__init__'
+    return cls
+
+
+@fix_dataclass_init_docs
+@dataclasses.dataclass
+class Material:
+    """Helper class for materials.
+
+    Attributes:
+        name: Name of the material.
+        eps: Constant epsilon (relative permittivity) assigned for the material.
+        facecolor: Facecolor in red-green-blue (RGB) for drawings (default is black or :code:`(0, 0, 0)`).
+    """
+    name: str
+    eps: float = 1
+    facecolor: Size3 = (0, 0, 0)
+
+    def __str__(self):
+        return self.name
+
+
+SILICON = Material('Silicon', 3.4784 ** 2, (0.3, 0.3, 0.3))
+POLYSILICON = Material('Poly-Si', 3.4784 ** 2, (0.5, 0.5, 0.5))
+AIR = Material('Air')
+OXIDE = Material('Oxide', 1.4442 ** 2, (0.6, 0, 0))
+NITRIDE = Material('Nitride', 1.996 ** 2, (0, 0, 0.7))
+LS_NITRIDE = Material('Low-Stress Nitride', (0, 0.4, 1))
+LT_OXIDE = Material('Low-Temp Oxide', 1.4442 ** 2, (0.8, 0.2, 0.2))
+ALUMINUM = Material('Aluminum', (0, 0.5, 0))
+ALUMINA = Material('Alumina', 1.75, (0.2, 0, 0.2))
+ETCH = Material('Etch')
+
+TEST_ZERO = Material('Zero', 0, (0, 0, 0))
+TEST_ONE = Material('One', 1, (0, 0, 0))
+
+
+@fix_dataclass_init_docs
+@dataclasses.dataclass
+class Box:
+    """Helper class for quickly generating functions for design region placements.
+
+    Attributes:
+        size: size of box
+        spacing: spacing for pixelation
+        material: :code:`Material` for this Box
+        min: min x and min y of box
+    """
+    size: Size2
+    spacing: float = 1
+    material: Optional[Material] = None
+    min: Size2 = (0., 0.)
+
+    def __post_init__(self):
+        self.eps = self.material.eps if self.material is not None else None
+
+    @property
+    def max(self):
+        return self.min[0] + self.size[0], self.min[1] + self.size[1]
+
+    @property
+    def min_i(self):
+        return int(self.min[0] / self.spacing), int(self.min[1] / self.spacing)
+
+    @property
+    def max_i(self):
+        return int(self.max[0] / self.spacing), int(self.max[1] / self.spacing)
+
+    @property
+    def shape(self):
+        return self.max_i[0] - self.min_i[0], self.max_i[1] - self.min_i[1]
+
+    @property
+    def center(self) -> Size2:
+        return self.min[0] + self.size[0] / 2, self.min[1] + self.size[1] / 2
+
+    @property
+    def slice(self) -> Tuple[slice, slice]:
+        return slice(self.min_i[0], self.max_i[0]), slice(self.min_i[1], self.max_i[1])
+
+    @property
+    def copy(self) -> "Box":
+        return deepcopy(self)
+
+    def mask(self, array: Union[np.ndarray, jnp.ndarray]):
+        mask = np.zeros_like(array)
+        mask[self.slice[0], self.slice[1]] = 1.0
+        return mask
+
+    def translate(self, dx: float = 0, dy: float = 0) -> "Box":
+        self.min = (self.min[0] + dx, self.min[1] + dy)
+        return self
+
+    def align(self, c: Union["Box", Tuple[float, float]]) -> "Box":
+        center = c.center if isinstance(c, Box) else c
+        self.translate(center[0] - self.center[0], center[1] - self.center[1])
+        return self
+
+    def halign(self, c: Union["Box", float], left: bool = True, opposite: bool = True):
+        x = self.min[0] if left else self.max[0]
+        p = c if isinstance(c, float) or isinstance(c, int) \
+            else (c.min[0] if left and not opposite or opposite and not left else c.max[0])
+        self.translate(dx=p - x)
+        return self
+
+    def valign(self, c: Union["Box", float], bottom: bool = True, opposite: bool = True):
+        y = self.min[1] if bottom else self.max[1]
+        p = c if isinstance(c, float) or isinstance(c, int) \
+            else (c.min[1] if bottom and not opposite or opposite and not bottom else c.max[1])
+        self.translate(dy=p - y)
+        return self
 
 
 def poynting_fn(axis: int = 2, use_jax: bool = False):
@@ -98,15 +219,3 @@ def splitter_metrics(sparams: xr.DataArray):
         'upper': powers.loc["b0"],
         'lower': powers.loc["b1"],
     }
-
-
-def fix_dataclass_init_docs(cls):
-    """Fix the ``__init__`` documentation for a :class:`dataclasses.dataclass`.
-
-    :param cls: The class whose docstring needs fixing
-    :returns: The class that was passed so this function can be used as a decorator
-
-    .. seealso:: https://github.com/agronholm/sphinx-autodoc-typehints/issues/123
-    """
-    cls.__init__.__qualname__ = f'{cls.__name__}.__init__'
-    return cls

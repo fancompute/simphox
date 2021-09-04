@@ -1,8 +1,6 @@
 from .sim import SimGrid
 from .utils import d2curl_op, yee_avg_jax
-from .typing import Shape, Dim, GridSpacing, Optional, Tuple, Union, SpSolve, Shape2, Dim2, List, Callable, Dict, Dim3
-
-from functools import lru_cache
+from .typing import Shape, Size, GridSpacing, Optional, Tuple, Union, SpSolve, Shape2, Size2, List, Callable, Dict, Size3
 
 import numpy as np
 import scipy.sparse as sp
@@ -50,10 +48,10 @@ class FDFD(SimGrid):
         .. math::
             A = \\nabla \\times \\mu^{-1} \\nabla \\times - k_0^2 \\epsilon
 
-            b = k_0 \\mathbf{j}
+            \\mathbf{b} = k_0 \\mathbf{j}
 
         is an operator representing the discretized EM wave operator at frequency
-        :math:`\\omega = k_0 = \\frac{2\pi}{\\lambda}`.
+        :math:`\\omega = k_0 = \\frac{2\\pi}{\\lambda}`.
 
         Therefore, :math:`\\mathbf{e} = A^{-1}\\mathbf{b}`.
 
@@ -67,21 +65,21 @@ class FDFD(SimGrid):
             \\mathbf{b}_z = k_0 \\mathbf{j}_z
 
     Attributes:
-        shape: Tuple of size 1, 2, or 3 representing the number of pixels in the grid
-        spacing: Spacing (microns) between each pixel along each axis (must be same dim as `grid_shape`)
+        size: Tuple of size 1, 2, or 3 representing the size in the grid in arbitrary units
+        spacing: Spacing (microns) between each pixel along each axis (must be same dim as :code:`size`)
         eps: Relative permittivity :math:`\\epsilon_r`
         bloch_phase: Bloch phase (generally useful for angled scattering sims, not yet implemented!)
         pml: Perfectly matched layer (PML) of thickness on both sides of the form :code:`(x_pml, y_pml, z_pml)`
         pml_params: The PML parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
         yee_avg: whether to do a yee average (highly recommended)
     """
-    def __init__(self, shape: Shape, spacing: GridSpacing,
+    def __init__(self, size: Size, spacing: GridSpacing,
                  wavelength: float = 1.55, eps: Union[float, np.ndarray] = 1,
-                 bloch_phase: Union[Dim, float] = 0.0, pml: Optional[Union[int, Shape, Dim]] = None,
-                 pml_params: Dim3 = (4, -16, 1.0), yee_avg: bool = True, name: str = 'fdfd'):
+                 bloch_phase: Union[Size, float] = 0.0, pml: Optional[Union[int, Shape, Size]] = None,
+                 pml_params: Size3 = (4, -16, 1.0), yee_avg: bool = True, name: str = 'fdfd'):
 
         super(FDFD, self).__init__(
-            shape=shape,
+            size=size,
             spacing=spacing,
             eps=eps,
             bloch_phase=bloch_phase,
@@ -92,6 +90,7 @@ class FDFD(SimGrid):
         )
 
         self.wavelength = wavelength
+        self.k0 = 2 * np.pi / self.wavelength
 
         # overwrite dxes with PML-scaled ones if specified
         if self.pml_shape is not None:
@@ -104,8 +103,18 @@ class FDFD(SimGrid):
 
     @classmethod
     def from_simgrid(cls, simgrid: SimGrid, wavelength: float):
+        """Prepare an :code:`FDFD` instance from a generic :code:`SimGrid` and wavelength :math:`\\lambda`.
+
+        Args:
+            simgrid: :code:`SimGrid` instance.
+            wavelength: Wavelength (:math:`\\lambda`).
+
+        Returns:
+            The :code:`FDFD` instance
+
+        """
         fdfd = cls(
-            shape=simgrid.shape,
+            size=simgrid.size,
             spacing=simgrid.spacing,
             wavelength=wavelength,
             eps=simgrid.eps,
@@ -116,10 +125,6 @@ class FDFD(SimGrid):
         fdfd.port_thickness = simgrid.port_thickness
         fdfd.port_height = simgrid.port_height
         return fdfd
-
-    @property
-    def k0(self):
-        return 2 * np.pi / self.wavelength
 
     @property
     def mat(self) -> sp.csr_matrix:
@@ -140,7 +145,7 @@ class FDFD(SimGrid):
         """Build the discrete Maxwell operator :math:`A_z(k_0)` acting on :math:`\\mathbf{e}_z` (for 2D problems).
 
         Returns:
-            Electric field operator :math:`A_z` for a source with z-polarized e-field.
+            Electric field operator :math:`A_z` for a source with ez-polarized field.
         """
         df, db = self.df, self.db
         ddz = -db[0] @ df[0] - db[1] @ df[1]
@@ -153,7 +158,7 @@ class FDFD(SimGrid):
         """Build the discrete Maxwell operator :math:`A_z(k_0)` acting on :math:`\\mathbf{h}_z` (for 2D problems).
 
         Returns:
-            Electric field operator :math:`A_z` for a source with z-polarized e-field.
+            Magnetic field operator :math:`A_z` for a source with hz-polarized field.
         """
         df, db = self.df, self.db
         t0, t1 = sp.diags(1 / self.eps_t[0].flatten()), sp.diags(1 / self.eps_t[1].flatten())
@@ -202,7 +207,7 @@ class FDFD(SimGrid):
             callback: a function to run during the solve (only applies in 3d iterative solver case, not yet implemented)
 
         Returns:
-            Electric fields that solve the problem :math:`A\\mathbf{e} = \\mathbf{b} = i \\omega \\mathbf{j}`
+            Electric fields that solve the problem :math:`A\\mathbf{e} = \\mathbf{b} = i \\omega \\mathbf{j}`.
 
         """
         b = self.k0 * src.flatten()
@@ -225,8 +230,7 @@ class FDFD(SimGrid):
             mat = self.mat_hz if tm_2d else self.mat_ez
             fz = solver_fn(mat, b) if solver_fn else spsolve_pardiso(mat, b)
             o = np.zeros_like(fz)
-            field = np.vstack((o, o, fz))
-            field = field.reshape((3, *self.shape3))
+            field = np.vstack((o, o, fz)).reshape((3, *self.shape3))
             df = self.diff_fn(use_h=tm_2d, use_jax=False)
             eps_t = self.eps_t
             if tm_2d:
@@ -258,7 +262,7 @@ class FDFD(SimGrid):
         return _scpml(pe), _scpml(ph)
 
     @classmethod
-    def from_pattern(cls, component: "Pattern", core_eps: float, clad_eps: float, spacing: float, boundary: Dim,
+    def from_pattern(cls, component: "Pattern", core_eps: float, clad_eps: float, spacing: float, boundary: Size,
                      pml: float, wavelength: float, component_t: float = 0, component_zmin: Optional[float] = None,
                      rib_t: float = 0, sub_z: float = 0, height: float = 0, bg_eps: float = 1, name: str = 'fdfd'):
         """Initialize an FDFD from a Pattern defined in DPhox.
@@ -291,11 +295,8 @@ class FDFD(SimGrid):
         npml = int(pml / spacing)
         component_zmin = sub_z if component_zmin is None else component_zmin
         spacing = spacing * np.ones(2 + (component_t > 0)) if isinstance(spacing, float) else np.asarray(spacing)
-        if height > 0:
-            shape = (np.asarray((x, y, height)) / spacing).astype(np.int)
-        else:
-            shape = (np.asarray((x, y)) / spacing).astype(np.int)
-        grid = cls(shape, spacing, wavelength=wavelength, eps=bg_eps, pml=npml, name=name)
+        size = (x, y, height) if height > 0 else (x, y)
+        grid = cls(size, spacing, wavelength=wavelength, eps=bg_eps, pml=npml, name=name)
         grid.fill(sub_z + rib_t, core_eps)
         grid.fill(sub_z, clad_eps)
         grid.add(component, core_eps, component_zmin, component_t)
@@ -310,6 +311,7 @@ class FDFD(SimGrid):
             measure_info: A list of :code:`port_name`, :code:`mode_idx` to get mode measurements at each port.
 
         Returns:
+            Sparams measured at and with respect to the ports specified in the class.
 
         """
         measure_fn = self.get_measure_fn(measure_info)
@@ -323,25 +325,24 @@ class FDFD(SimGrid):
         """Build a fields function of a set of parameters (e.g., density, epsilon, etc.)
         given the source and transform function.
 
-        1. A numpy array source :code:`src`
+        1. A numpy array source :code:`src`.
         2. The JAX-transformable transform function :code:`transform_fn` (e.g. transform) that yields
            the epsilon distribution used by jax.
 
         Args:
-            src: Source for the solver
-            transform_fn: Transforms parameters to yield the epsilon parameters used by jax (if None, use identity)
-            tm_2d: Whether to solve the TM polarization for this FDFD (only relevant for 2D, ignored for 3D)
+            src: Source for the solver.
+            transform_fn: Transforms parameters to yield the epsilon parameters used by jax (if None, use identity).
+            tm_2d: Whether to solve the TM polarization for this FDFD (only relevant for 2D, ignored for 3D).
 
         Returns:
-            A solve function (2d or 3d based on defined :code:`ndim` specified for the instance of :code:`FDFD`)
-
-        Returns:
+            A solve function (2d or 3d based on defined :code:`ndim` specified for the instance of :code:`FDFD`).
 
         """
         src = jnp.ravel(jnp.array(src))
         k0 = self.k0
         transform_fn = transform_fn if transform_fn is not None else lambda x: x
-        expand_3d = self.get_expand_3d_fn(use_jax=True)
+        shape3 = self.shape3
+        field_shape = self.field_shape
 
         def coo_to_jnp(mat: sp.coo_matrix):
             mat.sort_indices()
@@ -350,7 +351,7 @@ class FDFD(SimGrid):
 
         if self.ndim < 3:
             shape = self.shape
-            o = expand_3d(jnp.zeros(self.shape, jnp.complex128))
+            o = jnp.zeros(self.shape3, jnp.complex128)
             if tm_2d:
                 # exact 2d FDFD for TM polarization
                 constant_term = -jnp.ones_like(self.eps.flatten()) * k0 ** 2
@@ -365,13 +366,13 @@ class FDFD(SimGrid):
 
                 @jax.jit
                 def solve(rho: jnp.ndarray):
-                    eps_t = yee_avg_jax(expand_3d(transform_fn(rho)))
+                    eps_t = yee_avg_jax(transform_fn(rho).reshape(self.shape3))
                     eps_x, eps_y = jnp.ravel(eps_t[0]), jnp.ravel(eps_t[1])
                     ddx_entries = x_op(-1 / eps_y)
                     ddy_entries = y_op(-1 / eps_x)
                     mat_entries = jnp.hstack((constant_term, ddx_entries, ddy_entries))
                     hz = spsolve(mat_entries, k0 * src, jnp.hstack((constant_term_indices, x_ind, y_ind)))
-                    hz = expand_3d(hz.reshape(shape))
+                    hz = hz.reshape(shape3)
                     h = jnp.stack((o, o, hz))
                     e = jnp.stack((dh(h[2], 1), -dh(h[2], 0), o)) / (1j * k0 * eps_t)
                     return jnp.stack((e, h))
@@ -386,10 +387,10 @@ class FDFD(SimGrid):
 
                 @jax.jit
                 def solve(rho: jnp.ndarray):
-                    eps = yee_avg_2d_z(expand_3d(transform_fn(rho))).ravel()
+                    eps = yee_avg_2d_z(transform_fn(rho).reshape(shape3)).ravel()
                     mat_entries = jnp.hstack((-eps * k0 ** 2, ddz_entries))
                     ez = spsolve(mat_entries, k0 * src, mat_indices)
-                    ez = expand_3d(ez.reshape(shape))
+                    ez = ez.reshape(shape3)
                     e = jnp.stack((o, o, ez))
                     h = jnp.stack((de(e[2], 1), -de(e[2], 0), o)) / (1j * k0)
                     return jnp.stack((e, h))
@@ -397,9 +398,6 @@ class FDFD(SimGrid):
             # iterative 3d FDFD (simpler than 2D code-wise, but takes way more memory and time)
             curl_e = curl_fn(self.diff_fn(use_h=False, use_jax=True), use_jax=True)
             curl_h = curl_fn(self.diff_fn(use_h=True, use_jax=True), use_jax=True)
-
-            shape3 = self.shape3
-            field_shape = (3, *shape3)
 
             def op(eps: jnp.ndarray):
                 return lambda b: curl_h(curl_e(b.reshape(field_shape))) - k0 ** 2 * eps * b.reshape(field_shape)
@@ -414,7 +412,7 @@ class FDFD(SimGrid):
 
         return solve
 
-    def to_2d(self, wavelength: float = None, slab_x: Union[Shape2, Dim2] = None, slab_y: Union[Shape2, Dim2] = None):
+    def to_2d(self, wavelength: float = None, slab_x: Union[Shape2, Size2] = None, slab_y: Union[Shape2, Size2] = None):
         """Project a 3D FDFD into a 2D FDFD using the variational 2.5D method laid out in the
         [paper](https://ris.utwente.nl/ws/files/5413011/ishpiers09.pdf).
 
@@ -431,7 +429,7 @@ class FDFD(SimGrid):
         wavelength = self.wavelength if wavelength is None else wavelength
         return FDFD.from_simgrid(super(FDFD, self).to_2d(wavelength), wavelength)
 
-    def tfsf_profile(self, q_mask: np.ndarray, wavelength: float, k: Dim):
+    def tfsf_profile(self, q_mask: np.ndarray, wavelength: float, k: Size):
         mask = q_mask
         q = sp.diags(mask.flatten())
         period = wavelength  # equivalent to period since c = 1!
@@ -442,4 +440,5 @@ class FDFD(SimGrid):
                          np.exp(1j * self.pos[2][:-1] * k[2])).flatten()
         a = self.mat
         src = self.reshape((q @ a - a @ q) @ fsrc)  # qaaq = quack :)
+        raise NotImplementedError('TFSF profile')
         return src

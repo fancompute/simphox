@@ -12,3 +12,6 @@ data/*
 aim_lib/*
 doc/source/_build
 *.gds
+*.jpg
+*.png
+*.tif

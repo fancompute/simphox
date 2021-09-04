@@ -1,13 +1,12 @@
+import dataclasses
 from functools import lru_cache
 
 import jax.numpy as jnp
 import numpy as np
 import scipy.sparse as sp
-import dataclasses
 
-from .typing import Shape, Dim, Dim3, GridSpacing, Optional, List, Union, Dict, Tuple, Op
+from .typing import Shape, Size, Size3, GridSpacing, Optional, List, Union, Dict, Op
 from .utils import curl_fn, yee_avg, fix_dataclass_init_docs
-
 
 try:
     DPHOX_IMPORTED = True
@@ -19,7 +18,7 @@ except ImportError:
 @fix_dataclass_init_docs
 @dataclasses.dataclass
 class Port:
-    """Port used in components in DPhox
+    """Port to define where sources and measurements lie in photonic simulations.
 
     A port defines the center and angle/orientation in a design.
 
@@ -27,9 +26,9 @@ class Port:
         x: x position of the port
         y: y position of the port
         a: angle (orientation) of the port (in degrees)
-        w: the width of the port (optional, specified in design, mostly used for simulation)
-        z: z position of the port (optional)
-        h: the height of the port (optional, not specified in design, mostly used for simulation)
+        w: the width of the port (specified in design, mostly used for simulation)
+        z: z position of the port (not specified in design, mostly used for simulation)
+        h: the height of the port (not specified in design, mostly used for simulation)
     """
     x: float
     y: float
@@ -52,29 +51,33 @@ class Port:
 
 
 class Grid:
-    def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1.0):
-        """Grid object accomodating any electromagnetic simulation strategy (FDFD, FDTD, BPM, etc.)
+    def __init__(self, size: Size, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1.0):
+        """Grid object accomodating any electromagnetic simulation (FDFD, FDTD, BPM, etc.)
 
         Args:
-            shape: Tuple of size 1, 2, or 3 representing the number of pixels in the grid
+            size: Tuple of size 1, 2, or 3 representing the size of the grid
             spacing: Spacing (microns) between each pixel along each axis (must be same dim as `grid_shape`)
-            eps: Relative permittivity
+            eps: Relative permittivity (
         """
-        self.shape = np.asarray(shape, dtype=int)
-        self.spacing = spacing * np.ones(len(shape)) if isinstance(spacing, int) or isinstance(spacing, float) else np.asarray(spacing)
-        self.ndim = len(shape)
+        self.size = np.asarray(size)
+        self.spacing = spacing * np.ones(len(size)) if isinstance(spacing, int) or isinstance(spacing, float) else np.asarray(spacing)
+        self.ndim = len(size)
+        if not self.ndim == self.spacing.size:
+            raise AttributeError(f'Require size.size == ndim == spacing.size but got '
+                                 f'{self.size.size} != {self.spacing.size}')
+        self.shape = np.around(self.size / self.spacing).astype(int)
         self.shape3 = np.hstack((self.shape, np.ones((3 - self.ndim,), dtype=self.shape.dtype)))
         self.spacing3 = np.hstack((self.spacing, np.ones((3 - self.ndim,), dtype=self.spacing.dtype) * np.inf))
+        self.size3 = np.hstack((self.size, np.zeros((3 - self.ndim,), dtype=self.size.dtype)))
+        self.center = self.size3 / 2
+        self.field_shape = (3, *self.shape3)
 
-        if not self.ndim == self.spacing.size:
-            raise AttributeError(f'Require shape.size == spacing.size but got '
-                                 f'{self.shape.size} != {self.spacing.size}')
         self.n = np.prod(self.shape)
         self.eps: np.ndarray = np.ones(self.shape) * eps if not isinstance(eps, np.ndarray) else eps
         if not tuple(self.shape) == self.eps.shape:
-            raise AttributeError(f'Require grid_shape == eps.shape but got '
+            raise AttributeError(f'Require grid.shape == eps.shape but got '
                                  f'{self.shape} != {self.eps.shape}')
-        self.size = self.spacing * self.shape
+
         self.cell_sizes = [(self.spacing[i] * np.ones((self.shape[i],)) if self.ndim > 1 else self.spacing * np.ones(self.shape))
                            if i < self.ndim else np.ones((1,)) for i in range(3)]
         self.pos = [np.hstack((0, np.cumsum(dx))) if dx.size > 1 else np.asarray((0,)) for dx in self.cell_sizes]
@@ -85,29 +88,27 @@ class Grid:
         self.port_thickness = 0
         self.port_height = 0
 
-    def _check_bounds(self, component) -> bool:
-        b = component.bounds
-        return b[0] >= 0 and b[1] >= 0 and b[2] <= self.size[0] and b[3] <= self.size[1]
-
-    def fill(self, zmax: float, eps: float) -> "Grid":
-        """Fill grid up to `zmax`, typically used for substrate + cladding epsilon settings
+    def fill(self, height: float, eps: float) -> "Grid":
+        """Fill grid up to `height`, typically used for substrate + cladding epsilon settings
 
         Args:
-            zmax: Maximum z (or final dimension) of the fill operation
-            eps: Relative eps to fill
+            height: Maximum final dimension of the fill operation (`y` if 2D, `z` if 3D).
+            eps: Relative permittivity to fill.
 
         Returns:
-            The modified FDFD object (:code:`self`)
+            The modified :code:`Grid` for chaining (:code:`self`)
 
         """
-        if zmax > 0:
-            self.eps[..., :int(zmax / self.spacing[-1])] = eps
+        if height > 0:
+            self.eps[..., :int(height / self.spacing[-1])] = eps
         else:
             self.eps = np.ones_like(self.eps) * eps
         return self
 
     def add(self, component: "Pattern", eps: float, zmin: float = None, thickness: float = None) -> "Grid":
-        """Add a component to the grid
+        """Add a component to the grid.
+
+        Spe
 
         Args:
             component: component to add
@@ -116,11 +117,12 @@ class Grid:
             thickness: component thickness (`zmax = zmin + thickness`)
 
         Returns:
-            The modified FDFD object (:code:`self`)
+            The modified :code:`Grid` for chaining (:code:`self`)
 
         """
-        if not self._check_bounds(component):
-            raise ValueError('The pattern is out of bounds')
+        b = component.bounds
+        if not b[0] >= 0 and b[1] >= 0 and b[2] <= self.size[0] and b[3] <= self.size[1]:
+            raise ValueError('The pattern must have min x, y >= 0 and max x, y less than size.')
         self.components.append(component)
         mask = component.mask(self.shape[:2], self.spacing)
         if self.ndim == 2:
@@ -132,24 +134,59 @@ class Grid:
                      for port_name, port in component.port.items()}
         return self
 
-    def reshape(self, v: np.ndarray) -> np.ndarray:
-        """A simple method to reshape flat 3d vec array into the grid shape
+    def set_eps(self, center: Size3, size: Size3, eps: float):
+        """Set the region specified by :code:`center`, :code:`size` (in grid units) to :code:`eps`.
 
         Args:
-            v: vector of size `(3n,)` to rearrange into array of size `(3, n)`
+            center: Center of the region.
+            size: Size of the region.
+            eps: Epsilon (relative permittivity) to set.
 
         Returns:
-
+            The modified :code:`Grid` for chaining (:code:`self`)
 
         """
-        return v.reshape((3, *self.shape3)) if v.ndim == 1 else v.flatten()
+        s = self.slice(center, size, squeezed=True)
+        eps_3d = self.eps.reshape(self.shape3)
+        eps_3d[s[0], s[1], s[2]] = eps
+        self.eps = eps_3d.squeeze()
+        return self
 
-    def slice(self, center: Dim3, size: Dim3, squeezed: bool = True):
+    def mask(self, center: Size3, size: Size3):
+        """Given a size and center, this function defines a mask which sets pixels in the region corresponding to
+        :code:`center` and :code:`size` to 1 and all other pixels to zero.
+
+        Args:
+            center: position of the mask in (x, y, z) in the units of the simulation (note: NOT in terms of array index)
+            size: size of the mask box in (x, y, z) in the units of the simulation (note: NOT in terms of array index)
+
+        Returns:
+            The mask array of size :code:`grid.shape`.
+
+        """
+        s = self.slice(center, size, squeezed=True)
+        mask = np.zeros(self.shape3)
+        mask[s[0], s[1], s[2]] = 1
+        return mask.squeeze()
+
+    def reshape(self, v: np.ndarray) -> np.ndarray:
+        """A simple method to reshape flat 3d field array into the grid shape
+
+        Args:
+            v: vector of size :code:`3n` to rearrange into array of size :code:`(3, nx, ny, nz)`
+
+        Returns:
+            The reshaped array
+
+        """
+        return v.reshape(self.field_shape)
+
+    def slice(self, center: Size3, size: Size3, squeezed: bool = True):
         """Pick a slide of this grid
 
         Args:
-            center: position of the mode in (x, y, z) in the units of the simulation (note: NOT in terms of array index)
-            size: position of the mode in (x, y, z) in the units of the simulation (note: NOT in terms of array index)
+            center: center of the slice in (x, y, z) in the units of the simulation (note: NOT in terms of array index)
+            size: size of the slice in (x, y, z) in the units of the simulation (note: NOT in terms of array index)
             squeezed: whether to squeeze the slice to the minimum dimension (the squeeze order is z, then y).
 
         Returns:
@@ -163,32 +200,33 @@ class Grid:
         if not len(center) == 3:
             raise ValueError(f"For simulation that is 3d, must provide center arraylike of size 3 but got {center}")
 
-        c = (np.asarray(center) / self.spacing3).astype(np.int)  # assume isotropic for now...
-        shape = (np.asarray(size) / self.spacing3).astype(np.int)
+        c = np.around(np.asarray(center) / self.spacing3).astype(int)  # assume isotropic for now...
+        shape = np.around(np.asarray(size) / self.spacing3).astype(int)
 
         s0, s1, s2 = shape[0] // 2, shape[1] // 2, shape[2] // 2
         c0 = c[0] if squeezed else slice(c[0], c[0] + 1)
-        c1 = c[1] if squeezed else slice(c[1], c[2] + 1)
+        c1 = c[1] if squeezed else slice(c[1], c[1] + 1)
         c2 = c[2] if squeezed else slice(c[2], c[2] + 1)
-        if s0 == s1 == s2 == 0:
-            raise ValueError(f"Require the size result in a nonzero-sized shape, but got a single point in the grid"
-                             f"(i.e., the size {size} may be less than the spacing {self.spacing3})")
+        # if s0 == s1 == s2 == 0:
+        #     raise ValueError(f"Require the size result in a nonzero-sized shape, but got a single point in the grid"
+        #                      f"(i.e., the size {size} may be less than the spacing {self.spacing3})")
         return (slice(c[0] - s0, c[0] - s0 + shape[0]) if shape[0] > 0 else c0,
                 slice(c[1] - s1, c[1] - s1 + shape[1]) if shape[1] > 0 else c1,
                 slice(c[2] - s2, c[2] - s2 + shape[2]) if shape[2] > 0 else c2)
 
-    def view_fn(self, center: Tuple[float, float, float], size: Tuple[float, float, float], use_jax: bool = True):
-        """Return a function that views a field at specific region specified by center and size in the grid. This
-        is used for mode measurements.
+    def view_fn(self, center: Size3, size: Size3, use_jax: bool = True):
+        """Return a function that views a field at specific region.
+
+        The view function is specified by center and size in the grid. This is typically used for
+        mode-based sources and measurements.
 
         Args:
             center: Center of the region
             size: Size of the region
             use_jax: Use jax
-            squeezed: Whether to squeeze the array when viewing the fields
 
         Returns:
-            A view callable function that orients the field and finds the appropriate slice
+            A view callable function that orients the field and finds the appropriate slice.
 
         """
         if np.count_nonzero(size) == 3:
@@ -222,25 +260,35 @@ class Grid:
 
         return view
 
-    def get_expand_3d_fn(self, use_jax=False):
-        xp = jnp if use_jax else np
-        if self.ndim == 1:
-            return lambda x: xp.squeeze(x)[..., xp.newaxis, xp.newaxis]
-        elif self.ndim == 2:
-            return lambda x: xp.squeeze(x)[..., xp.newaxis]
-        else:
-            return lambda x: x
+    def get_mask_fn(self, size: Size3, center: Optional[Size3] = None):
+        """Given a box with :code:`size` and :code:`center`, return a function that sets pixels in :code:`rho`,
+        where :code:`rho.shape == grid.eps.shape`, outside the box to :code:`eps`.
+        This is important in inverse design to avoid modifying the material region near the source and measurement
+        regions.
+
+        Args:
+            center: position of the mask in (x, y, z) in the units of the simulation (note: NOT in terms of array index)
+            size: size of the mask box in (x, y, z) in the units of the simulation (note: NOT in terms of array index)
+
+        Returns:
+            The mask function
+
+        """
+        rho_init = self.eps
+        center = self.center if center is None else center
+        mask = self.mask(center, size)
+        return lambda rho: jnp.array(rho_init) * (1 - mask) + rho * mask
 
 
 class YeeGrid(Grid):
-    def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
-                 bloch_phase: Union[Dim, float] = 0.0, pml: Optional[Union[int, Shape, Dim]] = None,
-                 pml_params: Dim3 = (4, -16, 1.0), yee_avg: int = 1, name: str = 'simgrid'):
+    def __init__(self, size: Size, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
+                 bloch_phase: Union[Size, float] = 0.0, pml: Optional[Union[int, Shape, Size]] = None,
+                 pml_params: Size3 = (4, -16, 1.0), yee_avg: int = 1, name: str = 'simgrid'):
         """The base :code:`YeeGrid` class (adding things to :code:`Grid` like Yee grid support, Bloch phase,
         PML shape, etc.).
 
         Args:
-            shape: Tuple of size 1, 2, or 3 representing the number of pixels in the grid
+            size: Tuple of size 1, 2, or 3 representing the size of the grid
             spacing: Spacing (microns) between each pixel along each axis (must be same dim as `grid_shape`)
             eps: Relative permittivity :math:`\\epsilon_r`
             bloch_phase: Bloch phase (generally useful for angled scattering sims)
@@ -248,7 +296,7 @@ class YeeGrid(Grid):
             pml_params: The parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
             yee_avg: whether to do a yee average (highly recommended)
         """
-        super(YeeGrid, self).__init__(shape, spacing, eps)
+        super(YeeGrid, self).__init__(size, spacing, eps)
         self.pml_shape = np.asarray(pml, dtype=int) if isinstance(pml, tuple) else pml
         self.pml_shape = np.ones(self.ndim, dtype=int) * pml if isinstance(pml, int) else pml
         self.pml_params = pml_params
@@ -321,38 +369,38 @@ class YeeGrid(Grid):
         return _diff
 
     def curl_e(self, beta: Optional[float] = None, use_jax: bool = False) -> Op:
-        """Get the curl of the electric field :math:`\\mathbf{E}`
+        """Get the function that computes curl of the electric field :math:`\\mathbf{E}`.
 
         Args:
-            e: electric field :math:`\\mathbf{E}`
-            beta: Propagation constant in the z direction (note: x, y are the `cross section` axes)
+            beta: Propagation constant in the z direction (note: x, y are the `cross section` axes).
+            use_jax: Whether the returned function should use jax.
 
         Returns:
-            The discretized curl :math:`\\nabla \\times \\mathbf{E}`
+            A function that computes discretized curl :math:`\\nabla \\times \\mathbf{E}`.
 
         """
         return curl_fn(self.diff_fn(use_h=False, use_jax=use_jax), use_jax=use_jax, beta=beta)
 
     def curl_h(self, beta: Optional[float] = None, use_jax: bool = False) -> Op:
-        """Get the curl of the magnetic field :math:`\\mathbf{H}`
+        """Get the function that computes the curl of the magnetic field :math:`\\mathbf{H}`
 
            Args:
-               h: magnetic field :math:`\\mathbf{H}`
-               beta: Propagation constant in the z direction (note: x, y are the `cross section` axes)
+               beta: Propagation constant in the z direction (note: x, y are the `cross section` axes).
+               use_jax: Whether the returned function should use jax.
 
            Returns:
-               The discretized curl :math:`\\nabla \times \mathbf{H}`
+               A function that computes discretized curl :math:`\\nabla \times \\mathbf{H}`.
 
         """
         return curl_fn(self.diff_fn(use_h=True, use_jax=use_jax), use_jax=use_jax, beta=beta)
 
-    def pml_safe_placement(self, x: float, y: float, z: float) -> Dim3:
-        """ Specifies a source/ measurement placement that is safe from the PML region / edge of the simulation.
+    def pml_safe_placement(self, x: float, y: float, z: float) -> Size3:
+        """Specifies a source/ measurement placement that is safe from the PML region / edge of the simulation.
 
         Args:
-            x: Input x location
-            y: Input y location
-            z: Input z location
+            x: Input x location.
+            y: Input y location.
+            z: Input z location.
 
         Returns:
             New x, y, z tuple that is safe from PML (at least one Yee grid point away from the pml region).
@@ -367,5 +415,4 @@ class YeeGrid(Grid):
     @property
     @lru_cache()
     def eps_t(self):
-        expand_3d = self.get_expand_3d_fn()
-        return yee_avg(expand_3d(self.eps), shift=self.yee_avg)
+        return yee_avg(self.eps.reshape(self.shape3), shift=self.yee_avg)

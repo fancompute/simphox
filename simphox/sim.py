@@ -4,7 +4,7 @@ import jax.numpy as jnp
 
 from .grid import YeeGrid
 from .mode import ModeSolver, ModeLibrary
-from .typing import GridSpacing, Shape, Union, Dim, Optional, List, Tuple, Shape2, Dim2, Dict, Dim3, Callable, \
+from .typing import GridSpacing, Shape, Union, Size, Optional, List, Tuple, Shape2, Size2, Dict, Size3, Callable, \
     MeasureInfo, Op, PortLabel
 from .utils import fix_dataclass_init_docs
 from .viz import get_extent_2d
@@ -40,14 +40,14 @@ class SimCrossSection:
 
 
 class SimGrid(YeeGrid):
-    def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
-                 bloch_phase: Union[Dim, float] = 0.0, pml: Optional[Union[int, Shape, Dim]] = None,
-                 pml_params: Dim3 = (4, -16, 1.0), yee_avg: int = 1, use_jax: bool = False, name: str = 'simgrid'):
+    def __init__(self, size: Size, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
+                 bloch_phase: Union[Size, float] = 0.0, pml: Optional[Union[int, Shape, Size]] = None,
+                 pml_params: Size3 = (4, -16, 1.0), yee_avg: int = 1, use_jax: bool = False, name: str = 'simgrid'):
         """The base :code:`SimGrid` class (adding things to :code:`Grid` like Yee grid support, Bloch phase,
         PML shape, etc.).
 
         Args:
-            shape: Tuple of size 1, 2, or 3 representing the number of pixels in the grid
+            size: Tuple of size 1, 2, or 3 representing the number of pixels in the grid
             spacing: Spacing (microns) between each pixel along each axis (must be same dim as `grid_shape`)
             eps: Relative permittivity :math:`\\epsilon_r`
             bloch_phase: Bloch phase (generally useful for angled scattering sims)
@@ -55,10 +55,10 @@ class SimGrid(YeeGrid):
             pml_params: The parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
             yee_avg: whether to do a yee average (highly recommended)
         """
-        super(SimGrid, self).__init__(shape, spacing, eps, bloch_phase, pml, pml_params, yee_avg, name)
+        super(SimGrid, self).__init__(size, spacing, eps, bloch_phase, pml, pml_params, yee_avg, name)
         self.use_jax = use_jax
 
-    def modes(self, center: Dim3, size: Dim3, wavelength: float = 1.55, num_modes: int = 1) -> SimCrossSection:
+    def modes(self, center: Size3, size: Size3, wavelength: float = 1.55, num_modes: int = 1) -> SimCrossSection:
         """Eigenmode profile of a 2d or 3d :code:`SimGrid` object.
 
         Args:
@@ -70,29 +70,28 @@ class SimGrid(YeeGrid):
         Returns:
             A Tuple of a Modes object and view function for measuring the fields.
         """
-        mode_eps = np.atleast_3d(self.eps)[self.slice(center, size)].squeeze()
+        mode_eps = self.eps.reshape(self.shape3)[self.slice(center, size)].squeeze()
+        mode_size = tuple(np.around(np.array(mode_eps.shape) * self.spacing[0]).astype(int))
         modes = ModeLibrary(
-            shape=mode_eps.shape, spacing=self.spacing[0], eps=mode_eps, wavelength=wavelength, num_modes=num_modes
+            size=mode_size, spacing=self.spacing[0], eps=mode_eps, wavelength=wavelength, num_modes=num_modes
         )
         return SimCrossSection(modes, center, size)
 
-    def mode_source(self, center: Dim, size: Dim, wavelength: float = 1.55, mode_idx: int = 0):
+    def mode_source(self, center: Size, size: Size, wavelength: float = 1.55, mode_idx: int = 0):
         """For waveguide-related problems or shining light into a photonic port, an eigenmode source is used.
 
         Args:
             center: center tuple of the form :code:`(x, y, z)`
             size: size of the source
-            axis: axis for normal vector of cross-section (one of :code:`(0, 1, 2)`)
             wavelength: wavelength (arb. units, should match with spacing)
             mode_idx: mode index for the eigenmode for source profile
-            gpu: place source on the GPU
 
         Returns:
             Eigenmode source function and region (:code:`slice` object or mask)
         """
         sim_xs = self.modes(center, size, wavelength, num_modes=mode_idx + 1)
         return cw_source_fn(profile, wavelength, gpu), region
-    #
+
     # def cw_source(self, profile: np.ndarray, wavelength: float, t: float, dt: float) -> np.ndarray:
     #     """CW source array
     #
@@ -196,7 +195,6 @@ class SimGrid(YeeGrid):
         """
 
         excitation = [(port, 0) for port in self.port] if excitation is None else excitation
-
         return {name: self.modes(center=self.pml_safe_placement(*p.xyz), size=p.size * profile_size_factor,
                                  num_modes=np.max([mode_idx
                                                    for port_name, mode_idx in excitation if port_name == name]) + 1)
@@ -261,7 +259,7 @@ class SimGrid(YeeGrid):
         # We measure polarity, which is the orientation of the measurement interface
         # to determine whether the wave is entering or leaving the device
         # The polarity below assumes that ports are near edge of simulation.
-        polarity = 2 * (np.mod(angles, 360) < 180).astype(np.int) - 1
+        polarity = 2 * (np.mod(angles, 360) < 180).astype(int) - 1
         measure_fns = [port_to_modes[port_name].io.measure_fn(m, use_jax, tm_2d=tm_2d) for port_name, m in measure_info]
         view_fns = [self.view_fn(port_to_modes[port_name].center, port_to_modes[port_name].size, use_jax)
                     for port_name, _ in measure_info]
@@ -367,6 +365,16 @@ class SimGrid(YeeGrid):
         return sim_fn
 
     def viz_panel(self, img_width: float = 700) -> Tuple["pn.layout.Panel", Tuple["Pipe", "Pipe", "Pipe"]]:
+        """Visualizes a 2D slice of a simulation.
+
+        Args:
+            img_width: Width of the visualization panel for the simulation
+
+        Returns:
+            Panel / dashboard for visualizing the permittivity and field overlay
+            and Tuple of Pipes for feeding data to the panel (e.g. from an optimization or FDTD real-time simulation).
+
+        """
         if not HOLOVIEWS_IMPORTED:
             raise ImportError("Holoviews not imported, so a viz panel cannot be generated")
         if not self.ndim == 2:
@@ -393,15 +401,15 @@ class SimGrid(YeeGrid):
                       ), (eps_pipe, field_pipe, power_pipe)
 
     def to_2d(self, wavelength: float = None,
-              slab_x: Union[Shape2, Dim2] = None, slab_y: Union[Shape2, Dim2] = None) -> "SimGrid":
+              slab_x: Union[Shape2, Size2] = None, slab_y: Union[Shape2, Size2] = None) -> "SimGrid":
         """Project a 3D FDFD into a 2D FDFD using the variational 2.5D method laid out in the paper
         https://ris.utwente.nl/ws/files/5413011/ishpiers09.pdf.
 
         Args:
             wavelength: The wavelength to use for calculating the effective 2.5 FDFD
                 (useful to stabilize multi-wavelength optimizations)
-            slab_x: Port location x (if None, the port is provided by reading the port location specified by the component)
-            slab_y: Port location y (if None, the port is provided by reading the port location specified by the component)
+            slab_x: Port location x (if None, the port is provided by reading the port location specified by component)
+            slab_y: Port location y (if None, the port is provided by reading the port location specified by component)
 
         Returns:
             A 2D FDFD to approximate the 3D FDFD
@@ -452,8 +460,8 @@ class SimGrid(YeeGrid):
         """Decorates the :code:`sparams` and :code:`fields` using :code:`xarray.DataArray`
 
         Args:
-            sparams: The sparams resulting from a call to the returned callable from :code:`get_sim_sparams_fn`
-            fields: The fields resulting from a call to the returned callable from :code:`get_sim_sparams_fn`
+            sparams: The sparams resulting from a call to the returned callable from :code:`get_sim_sparams_fn`.
+            fields: The fields resulting from a call to the returned callable from :code:`get_sim_sparams_fn`.
 
         Returns:
             The decorated :code:`sparams` and :code:`fields`.
@@ -493,7 +501,7 @@ class SimGrid(YeeGrid):
 
     def fidelity(self, desired_sparams: Union[Dict[Tuple[str, int], np.complex128], Dict[str, np.complex128]],
                  measure_info: List[Tuple[str, int]] = None) -> Callable:
-        """ Returns the fidelity for the sparams.
+        """Returns the fidelity for the :code:`sparams`.
 
         Args:
             desired_sparams: The desired sparams, provided in dictionary form mapping port to relative magnitude;

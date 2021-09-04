@@ -1,12 +1,12 @@
 from functools import lru_cache
-
-import numpy as np
 from typing import Tuple, List, Callable
 
-from .grid import YeeGrid
-from .typing import Shape, Dim, GridSpacing, Optional, Union, Source, State, Dim3
-from .utils import pml_params, curl_fn, yee_avg
 import jax.numpy as jnp
+import numpy as np
+
+from .grid import YeeGrid
+from .typing import Shape, GridSpacing, Optional, Union, Source, State, Size3, Size
+from .utils import pml_params, curl_fn, yee_avg
 
 
 class FDTD(YeeGrid):
@@ -16,7 +16,7 @@ class FDTD(YeeGrid):
     ideally makes use of the jit capability of JAX.
 
     Attributes:
-        shape: shape of the simulation
+        size: size of the simulation
         spacing: spacing among the different dimensions
         eps: epsilon permittivity
         pml: perfectly matched layers (PML)
@@ -25,10 +25,10 @@ class FDTD(YeeGrid):
         name: Name of the simulator
     """
 
-    def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
-                 pml: Optional[Union[Shape, Dim]] = None, pml_params: Dim3 = (3, -35, 1),
+    def __init__(self, size: Size, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
+                 pml: Optional[Union[Shape, Size]] = None, pml_params: Size3 = (3, -35, 1),
                  use_jax: bool = True, name: str = 'fdtd'):
-        super(FDTD, self).__init__(shape, spacing, eps, pml=pml, pml_params=pml_params, name=name)
+        super(FDTD, self).__init__(size, spacing, eps, pml=pml, pml_params=pml_params, name=name)
         self.dt = 1 / np.sqrt(np.sum(1 / self.spacing ** 2))  # includes courant condition!
 
         # pml (internal to the grid / does not affect params, so specified here!)
@@ -62,14 +62,14 @@ class FDTD(YeeGrid):
         raise NotImplementedError("This class is still WIP")
 
     @property
-    def zero_state(self):
+    def zero_state(self) -> State:
         """Zero state, the default initial state for the FDTD
 
         Returns:
             Hidden state of the form:
-                e: current :math:`\mathbf{E}`
+                e: current :math:`\\mathbf{E}`
 
-                h: current :math:`\mathbf{H}`
+                h: current :math:`\\mathbf{H}`
 
                 psi_e: current :math:`\\boldsymbol{\\Psi}_E` for CPML updates (otherwise :code:`None`)
 
@@ -91,45 +91,52 @@ class FDTD(YeeGrid):
             The updates are of the form:
 
             .. math::
-                \mathbf{E}(t + \mathrm{d}t) &= \mathbf{E}(t) + \mathrm{d}t \\frac{\mathrm{d}\mathbf{E}}{\mathrm{d}t} \\
-                \mathbf{H}(t + \mathrm{d}t) &= \mathbf{H}(t) + \mathrm{d}t \\frac{\mathrm{d}\mathbf{H}}{\mathrm{d}t}
+                \\mathbf{E}(t + \\mathrm{d}t) &= \\mathbf{E}(t) + \\mathrm{d}t
+                \\frac{\\mathrm{d}\\mathbf{E}}{\\mathrm{d}t}
+
+                \\mathbf{H}(t + \\mathrm{d}t) &= \\mathbf{H}(t) +
+                \\mathrm{d}t \\frac{\\mathrm{d}\\mathbf{H}}{\\mathrm{d}t}
 
             From Maxwell's equations, we have (for current source :math:`\mathbf{J}(t)`):
 
             .. math::
-                \\frac{\mathrm{d}\mathbf{E}}{\mathrm{d}t} = \\frac{1}{\\epsilon} \\nabla \\times \mathbf{H}(t) + \mathbf{J}(t)
+                \\frac{\\mathrm{d}\\mathbf{E}}{\\mathrm{d}t} = \\frac{1}{\\epsilon} \\nabla
+                \\times \\mathbf{H}(t) + \\mathbf{J}(t)
 
-                \\frac{\mathrm{d}\mathbf{H}}{\mathrm{d}t} = -\\frac{1}{\mu} \\nabla \\times \mathbf{E}(t) + \mathbf{M}(t)
+                \\frac{\\mathrm{d}\\mathbf{H}}{\\mathrm{d}t} = -\\frac{1}{\\mu} \\nabla \\times
+                \\mathbf{E}(t) + \\mathbf{M}(t)
 
-            The recurrent update assumes that :math:`\mu = c = 1, \mathbf{M}(t) = \mathbf{0}` and factors in
+            The recurrent update assumes that :math:`\\mu = c = 1, \\mathbf{M}(t) = \\mathbf{0}` and factors in
             perfectly-matched layers (PML), which requires storing two additional PML arrays in the system's state
             vector, namely :math:`\\boldsymbol{\\Psi}_E(t)` and :math:`\\boldsymbol{\\Psi}_H(t)`.
 
             .. math::
-                \mathbf{\Psi_E}^{(t+1/2)} = \mathbf{b} \mathbf{\Psi_E}^{(t-1/2)} + \\nabla_{\mathbf{c}} \\times \mathbf{H}^{(t)}
+                \\mathbf{\\Psi_E}^{(t+1/2)} = \\mathbf{b} \\mathbf{\\Psi_E}^{(t-1/2)} +
+                \\nabla_{\\mathbf{c}} \\times \\mathbf{H}^{(t)}
 
-                \mathbf{\Psi_H}^{(t + 1)} = \mathbf{b} \mathbf{\Psi_H}^{(t)} + \\nabla_{\mathbf{c}} \\times \mathbf{E}^{(t)}
+                \\mathbf{\\Psi_H}^{(t + 1)} = \\mathbf{b} \mathbf{\\Psi_H}^{(t)} +
+                \\nabla_{\\mathbf{c}} \\times \\mathbf{E}^{(t)}
 
-                \mathbf{E}^{(t+1/2)} = \mathbf{E}^{(t-1/2)} + \\frac{\\Delta t}{\\epsilon} \\left(\\nabla \\times \mathbf{H}^{(t)} + \mathbf{J}^{(t)} + \mathbf{\Psi_E}^{(t+1/2)}\\right)
+                \\mathbf{E}^{(t+1/2)} = \\mathbf{E}^{(t-1/2)} + \\frac{\\Delta t}{\\epsilon} \\left(\\nabla \\times
+                \\mathbf{H}^{(t)} + \\mathbf{J}^{(t)} + \mathbf{\Psi_E}^{(t+1/2)}\\right)
 
-                \mathbf{H}^{(t + 1)} = \mathbf{H}^{(t)} - \\Delta t \\left(\\nabla \\times \mathbf{E}^{(t+1/2)} + \mathbf{\Psi_H}^{(t + 1)}\\right)
+                \\mathbf{H}^{(t + 1)} = \\mathbf{H}^{(t)} - \\Delta t \\left(\\nabla \\times \\mathbf{E}^{(t+1/2)} +
+                \\mathbf{\\Psi_H}^{(t + 1)}\\right)
 
 
             Note, in Einstein notation, the weighted curl operator is given by:
-            :math:`\\nabla_{\mathbf{c}} \\times \mathbf{v} := \epsilon_{ijk} c_j \partial_j v_k`.
+            :math:`\\nabla_{\\mathbf{c}} \\times \\mathbf{v} := \\epsilon_{ijk} c_i \\partial_j v_k`.
 
         Args:
-            state: current state of the form :code:`(e, h, psi_e, psi_h)`
-                -:code:`e` refers to electric field :math:`\mathbf{E}(t)`
-                -:code:`h` refers to magnetic field :math:`\mathbf{H}(t)`
-                -:code:`psi_e` refers to :math:`\\boldsymbol{\\Psi}_E(t)`
-                -:code:`psi_h` refers to :math:`\\boldsymbol{\\Psi}_H(t)`
-            src: is the source :math:`\mathbf{J}(t)`, the "input" to the system.
+            state: current state of the form :code:`(e, h, psi_e, psi_h)` = :math:`(\\mathbf{E}(t),
+            \\mathbf{H}(t), \\boldsymbol{\\Psi}_E(t), \\boldsymbol{\\Psi}_H(t))`.
+            src: The source :math:`\\mathbf{J}(t)`, i.e. the input excitation to the system.
             src_region: slice or mask of the added source to be added to E in the update (assume same shape as :code:`e`
                 if :code:`None`)
 
         Returns:
-            a new :code:`state`
+            a new :code:`State` of the form :code:`(e, h, psi_e, psi_h)` = :math:`(\\mathbf{E}(t),
+            \\mathbf{H}(t), \\boldsymbol{\\Psi}_E(t), \\boldsymbol{\\Psi}_H(t))`.
 
         """
         e, h, psi_e, psi_h = state
@@ -171,8 +178,8 @@ class FDTD(YeeGrid):
 
         Returns:
             state: final state of the form :code:`(e, h, psi_e, psi_h)`
-                -:code:`e` refers to electric field :math:`\mathbf{E}(t)`
-                -:code:`h` refers to magnetic field :math:`\mathbf{H}(t)`
+                -:code:`e` refers to electric field :math:`\\mathbf{E}(t)`
+                -:code:`h` refers to magnetic field :math:`\\mathbf{H}(t)`
                 -:code:`psi_e` refers to :math:`\\boldsymbol{\\Psi}_E(t)` (for debugging PML)
                 -:code:`psi_h` refers to :math:`\\boldsymbol{\\Psi}_H(t)` (for debugging PML)
 

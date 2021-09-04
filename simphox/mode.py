@@ -1,16 +1,14 @@
-from .grid import YeeGrid
-from .material import MaterialBlock
-from .typing import Shape, Dim, GridSpacing, Optional, Tuple, Union, List, Callable
-from .utils import poynting_fn, overlap, SMALL_NUMBER
-from .viz import plot_eps_2d, plot_power_2d, plot_field_2d
-
-import numpy as np
-import scipy.sparse as sp
-from scipy.sparse.linalg import eigs
-import copy
 from functools import lru_cache
 
 import jax.numpy as jnp
+import numpy as np
+import scipy.sparse as sp
+from scipy.sparse.linalg import eigs
+
+from .grid import YeeGrid
+from .typing import Size, GridSpacing, Optional, Tuple, Union, Callable, Size2
+from .utils import poynting_fn, overlap, Box
+from .viz import plot_power_2d, plot_field_2d
 
 try:  # pardiso (using Intel MKL) is much faster than scipy's solver
     from .mkl import feast_eigs
@@ -19,7 +17,6 @@ except OSError:  # if mkl isn't installed
 
 try:
     from dphox.component import Pattern
-
     DPHOX_INSTALLED = True
 except ImportError:
     DPHOX_INSTALLED = False
@@ -59,31 +56,31 @@ class ModeSolver(YeeGrid):
         This is made possible by the following set of coupled differential equations:
 
         .. math::
-            \beta^2 h_x &= \\partial_x(\\partial_x h_x + \\partial_y h_y) - \\epsilon_y (\\epsilon_z^{-1}
+            \\beta^2 h_x &= \\partial_x(\\partial_x h_x + \\partial_y h_y) - \\epsilon_y (\\epsilon_z^{-1}
             (\\partial_y h_x - \\partial_x h_y) + k_0^2) = C_{xy} \\begin{bmatrix} h_x \\ h_y\\end{bmatrix}
 
-            \beta^2 h_y &= \\partial_y(\\partial_x h_x + \\partial_y h_y) - \\epsilon_x (\\epsilon_z^{-1}
+            \\beta^2 h_y &= \\partial_y(\\partial_x h_x + \\partial_y h_y) - \\epsilon_x (\\epsilon_z^{-1}
             (\\partial_x h_y - \\partial_y h_x) + k_0^2) = C_{yx} \\begin{bmatrix} h_x \\ h_y\\end{bmatrix}
 
-            \beta^2 \\begin{bmatrix} h_x \\ h_y\\end{bmatrix} &= \\begin{bmatrix} C_{xy} \\ C_{yx}\\end{bmatrix}
+            \\beta^2 \\begin{bmatrix} h_x \\ h_y\\end{bmatrix} &= \\begin{bmatrix} C_{xy} \\ C_{yx}\\end{bmatrix}
             \\begin{bmatrix} h_x \\ h_y\\end{bmatrix}
 
-            \beta_m^2 \\mathbf{h}_{m} &= C_{\\mathrm{2d}} \\mathbf{h}_{m}
+            \\beta_m^2 \\mathbf{h}_{m} &= C_{\\mathrm{2d}} \\mathbf{h}_{m}
 
     Attributes:
-        shape: Tuple of size 1, 2, or 3 representing the number of pixels in the grid
-        spacing: Spacing (microns) between each pixel along each axis (must be same dim as `grid_shape`)
+        size: Tuple of size 1, 2, or 3 representing the size in arbitrary units
+        spacing: Spacing (microns) between each pixel along each axis (MUST be in same units as `size`)
         eps: Relative permittivity :math:`\\epsilon_r`
         bloch_phase: Bloch phase (generally useful for angled scattering sims)
         yee_avg: whether to do a yee average (highly recommended)
     """
 
-    def __init__(self, shape: Shape, spacing: GridSpacing,
+    def __init__(self, size: Size, spacing: GridSpacing,
                  wavelength: float = 1.55, eps: Union[float, np.ndarray] = 1,
-                 bloch_phase: Union[Dim, float] = 0.0, yee_avg: bool = True, name: str = 'mode'):
+                 bloch_phase: Union[Size, float] = 0.0, yee_avg: bool = True, name: str = 'mode'):
 
         super(ModeSolver, self).__init__(
-            shape=shape,
+            size=size,
             spacing=spacing,
             eps=eps,
             bloch_phase=bloch_phase,
@@ -99,12 +96,12 @@ class ModeSolver(YeeGrid):
     def wgm(self) -> sp.spmatrix:
         """Build the WaveGuide Mode (WGM) operator (for 1D or 2D grid only)
 
-        The WGM operator :math:`C(\omega)` acts on the magnetic field
-        :math:`\mathbf{h}` of the form `(hx, hy)`, which assumes cross-section translational x-symmetry:
+        The WGM operator :math:`C(\\omega)` acts on the magnetic field
+        :math:`\\mathbf{h}` of the form :code:`(hx, hy)`, which assumes cross-section translational x-symmetry:
         .. math::
-            C \mathbf{h}_m = \lambda_m \mathbf{h}_m,
-        where :math:`0 \leq m < M` for the :math:`M` modes with the largest wavenumbers
-        (:math:`\beta_m = \sqrt{\lambda_m}`).
+            C \\mathbf{h}_m = \\lambda_m \\mathbf{h}_m,
+        where :math:`0 \\leq m < M` for the :math:`M` modes with the largest wavenumbers
+        (:math:`\\beta_m = \\sqrt{\\lambda_m}`).
 
         Returns:
             Magnetic field operator :math:`C`.
@@ -128,40 +125,36 @@ class ModeSolver(YeeGrid):
     C = wgm  # C is the matrix for the guided mode eigensolver
 
     def e2h(self, e: np.ndarray, beta: Optional[float] = None) -> np.ndarray:
-        """
-        Convert magnetic field :math:`\mathbf{e}` to electric field :math:`\mathbf{h}`.
+        """Convert magnetic field :math:`\\mathbf{e}` to electric field :math:`\\mathbf{h}`.
 
-        Usage is: `h = mode.e2h(e)`, where `e` is grid-shaped (not flattened)
+        Usage is: :code:`h = mode.e2h(e)`, where :code:`e` is grid-shaped (not flattened)
 
         Mathematically, this represents rearranging the Maxwell equation in the frequency domain:
         ..math::
-            i \omega \mu \mathbf{h} = \nabla \times \mathbf{e}
+            i \\omega \\mu \\mathbf{h} = \\nabla \\times \\mathbf{e}
 
         Returns:
-            The h-field converted from the e-field
+            The h-field converted from the e-field.
 
         """
-        e = self.reshape(e) if e.ndim == 2 else e
-        return self.curl_e(beta)(e) / (1j * self.k0)
+        return self.curl_e(beta)(self.reshape(e)) / (1j * self.k0)
 
     def h2e(self, h: np.ndarray, beta: Optional[float] = None) -> np.ndarray:
-        """
-        Convert magnetic field :math:`\mathbf{h}` to electric field :math:`\mathbf{e}`.
+        """Convert magnetic field :math:`\\mathbf{h}` to electric field :math:`\\mathbf{e}`.
 
-        Usage is: `e = mode.h2e(h)`, where `h` is grid-shaped (not flattened)
+        Usage is: :code:`e = mode.h2e(h)`, where :code:`h` is grid-shaped (not flattened)
 
         Mathematically, this represents rearranging the Maxwell equation in the frequency domain:
         ..math::
-            -i \omega \epsilon \mathbf{e} = \nabla \times \mathbf{h}
+            -i \\omega \\epsilon \\mathbf{e} = \\nabla \\times \\mathbf{h}.
 
         Returns:
-            Function to convert h-field to e-field
+            Function to convert h-field to e-field.
 
         """
-        h = self.reshape(h) if h.ndim == 2 else h
-        return self.curl_h(beta)(h) / (1j * self.k0 * self.eps_t)
+        return self.curl_h(beta)(self.reshape(h)) / (1j * self.k0 * self.eps_t)
 
-    def solve(self, num_modes: int = 6, beta_guess: Optional[Union[float, Tuple[float, float]]] = None,
+    def solve(self, num_modes: int = 6, beta_guess: Optional[Union[float, Size2]] = None,
               tol: float = 1e-7) -> Tuple[np.ndarray, np.ndarray]:
         """FDFD waveguide mode solver
 
@@ -171,12 +164,12 @@ class ModeSolver(YeeGrid):
             C \\mathbf{h}_m = \\lambda_m \\mathbf{h}_m,
 
         where :math:`0 \\leq m < M` for the :math:`M` (`num_modes`) modes with the largest wavenumbers
-        (:math:`\beta_m = \\sqrt{\\lambda_m}`).
+        (:math:`\\beta_m = \\sqrt{\\lambda_m}`).
 
         Args:
-            num_modes: Number of modes
-            beta_guess: Guess for propagation constant :math:`\beta`
-            tol: Tolerance of the mode solver
+            num_modes: Number of modes to return.
+            beta_guess: Guess for propagation constant :math:`\beta` (the eigenvalue).
+            tol: Tolerance of the mode eigensolver.
 
         Returns:
             `num_modes` (:math:`M`) largest propagation constants (:math:`\\sqrt{\\lambda_m(C)}`)
@@ -200,8 +193,7 @@ class ModeSolver(YeeGrid):
             h = eigvecs
 
         h = h[:, inds_sorted].T
-        h *= np.exp(-1j * np.angle(h[:1, :]))  # divide by global phase or set polarity (set reference plane)
-        return np.sqrt(eigvals[inds_sorted]), h
+        return np.sqrt(eigvals[inds_sorted]), h * np.exp(-1j * np.angle(h[:1, :]))  # ensure phase doesn't change
 
     def profile(self, mode_idx: int = 0, power: float = 1,
                 beta_guess: Optional[float] = None, tol: float = 1e-5,
@@ -230,28 +222,88 @@ class ModeSolver(YeeGrid):
             src = self.reshape(h[mode_idx]) * polarity * np.sqrt(p)
         return beta, src if return_beta else src
 
-
-class ModeLibrary:
-    def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray],
-                 wavelength: float = 1.55, num_modes: int = 1):
-        """A data structure to contain the information about :math:`num_modes` cross-sectional modes
+    def block_design(self, waveguide: Box, wg_height: Optional[float] = None, sub_eps: float = 1, sub_height: float = 0,
+                     coupling_gap: float = 0, block: Optional[Box] = None, sep: Size = (0, 0),
+                     vertical: bool = False, rib_y: float = 0):
+        """A helper function for designing a useful port or cross section that benefites from ModeSolver.
 
         Args:
-            shape: The shape of the mode solver.
-            spacing: The spacing of the mode solver.
-            eps: The permittivity distribution for the mode solver.
-            wavelength: The wavelength for the modes.
-            num_modes: Number of modes that should be solved.
+            waveguide: The base waveguide material and size in the form of :code:`Box`.
+            wg_height: The waveguide height.
+            sub_eps: The substrate epsilon (defaults to air)
+            sub_height: The height of the substrate (or the min height of the waveguide built on top of it)
+            coupling_gap: The coupling gap specified means we get a pair of base blocks
+            separated by :code:`coupling_gap`.
+            block: Perturbing block.
+            sep: Separation of the block from the base waveguide layer.
+            vertical: Whether the perturbing block moves vertically, or laterally otherwise.
+            rib_y: Rib section
+
+        Returns:
+            The resulting :code:`ModeSolver` with the modified :code:`eps` property.
+
         """
+        if self.ndim == 1:
+            raise NotImplementedError("Only implemented for 2d for now (most useful case).")
+        if rib_y > 0:
+            self.fill(rib_y + sub_height, waveguide.eps)
+        self.fill(sub_height, sub_eps)
+        wg_height = sub_height if wg_height is None else wg_height
+        waveguide.align(self.center).valign(wg_height)
+        sep = (sep, sep) if not isinstance(sep, Tuple) else sep
+        d = coupling_gap / 2 + waveguide.size[0] / 2 if coupling_gap > 0 else 0
+        waveguides = [waveguide.copy.translate(-d), waveguide.copy.translate(d)]
+        blocks = []
+        if vertical:
+            blocks = [block.copy.align(waveguides[0]).valign(waveguides[0]).translate(dy=sep[0]),
+                      block.copy.align(waveguides[1]).valign(waveguides[1]).translate(dy=sep[1])]
+        elif block is not None:
+            blocks = [block.copy.valign(wg_height).halign(waveguides[0], left=False).translate(-sep[0]),
+                      block.copy.valign(wg_height).halign(waveguides[1]).translate(sep[1])]
+        for wg in waveguides + blocks:
+            self.set_eps((wg.center[0], wg.center[1], 0), (wg.size[0], wg.size[1], 0), wg.eps)
+        return self
+
+    def dispersion_sweep(self, wavelengths: np.ndarray, m: int = 6, pbar: Callable = None):
+        """Dispersion sweep for cross sectional modes
+
+        Args:
+            wavelengths: Wavelengths :math:`\\lambda` of length :math:`L`
+            m: Number of modes to solve
+            pbar: Progress bar handle (to show progress using e.g. tqdm)
+
+        Returns:
+            A list of :math:`L` :code:`Modes` solution objects
+
+        """
+        solutions = []
+        pbar = range if pbar is None else pbar
+        for wavelength in pbar(wavelengths):
+            solutions.append(self.solve(m, wavelength))
+        return solutions
+
+
+class ModeLibrary:
+    """A data structure to contain the information about :math:`num_modes` cross-sectional modes
+
+    Args:
+        size: The size (1d or 2d) of the mode solver.
+        spacing: The spacing of the mode solver.
+        eps: The permittivity distribution for the mode solver.
+        wavelength: The wavelength for the modes.
+        num_modes: Number of modes that should be solved.
+    """
+    def __init__(self, size: Size, spacing: GridSpacing, eps: Union[float, np.ndarray],
+                 wavelength: float = 1.55, num_modes: int = 1):
         self.solver = ModeSolver(
-            shape=shape,
+            size=size,
             spacing=spacing,
             eps=eps,
             wavelength=wavelength
         )
         self.ndim = self.solver.ndim
         self.betas, self.modes = self.solver.solve(num_modes)
-        self.modes = self.modes * np.exp(-1j * np.angle(self.modes[:1, :]))
+        self.modes = self.modes
         self.eps = eps
         self.num_modes = self.m = len(self.betas)
         self.o = np.zeros_like(self.modes[0])
@@ -289,9 +341,7 @@ class ModeLibrary:
             :math:`\\mathbf{E}_m`, an :code:`ndarray` of shape :code:`(3, X, Y, Z)` for mode :math:`m \\leq M`
 
         """
-        if self.ndim == 2:
-            return self.solver.h2e(self.h(mode_idx), self.betas[mode_idx])
-        else:
+        if self.ndim == 1:
             mode = self.modes[mode_idx]
             if tm_2d:
                 mode = np.hstack((1j * self.betas[mode_idx] * mode, self.o,
@@ -300,6 +350,7 @@ class ModeLibrary:
             else:
                 mode = np.hstack((self.o, mode, self.o))
             return self.solver.reshape(mode)
+        return self.solver.h2e(self.h(mode_idx), self.betas[mode_idx])
 
     @lru_cache()
     def sz(self, mode_idx: int = 0) -> np.ndarray:
@@ -336,46 +387,12 @@ class ModeLibrary:
 
     @property
     @lru_cache()
-    def hs(self):
-        """An array for the magnetic fields `\\mathbf{H}` corresponding to all :math:`M` modes
-
-        Returns:
-           :math:`\\mathbf{H}`, an :code:`ndarray` of shape :code:`(M, 3, X, Y)`
-        """
-        hs = []
-        for mode in self.modes:
-            hs.append(self.solver.reshape(mode))
-        return np.stack(hs).squeeze()
-
-    @property
-    @lru_cache()
-    def es(self):
-        """An array for the magnetic fields `\mathbf{E}` corresponding to all :math:`M` modes
-
-        Returns:
-           :math:`\mathbf{E}`, an :code:`ndarray` of shape :code:`(M, 3, X, Y)`
-        """
-        es = []
-        for beta, h in zip(self.betas, self.hs):
-            es.append(self.solver.h2e(h[..., np.newaxis], beta))
-        return np.stack(es).squeeze()
-
-    @property
-    @lru_cache()
-    def szs(self):
-        """An array for the magnetic fields `\\mathbf{S}_z` corresponding to all :math:`M` modes
-
-        Returns:
-           :math:`\\mathbf{S}_z`, an :code:`ndarray` of shape :code:`(M, X, Y)`
-        """
-        szs = []
-        for e, h in zip(self.es, self.hs):
-            szs.append(poynting_fn(2)(e[..., np.newaxis], h[..., np.newaxis]))
-        return np.stack(szs).squeeze()
-
-    @property
-    @lru_cache()
     def ns(self):
+        """The refractive index for each mode :math:
+
+        Returns:
+            :math:`\\mathbf{n}`, an :code:`ndarray` for the refractive index of shape :code:`(M,)`
+        """
         return self.betas / self.solver.k0
 
     @property
@@ -386,49 +403,61 @@ class ModeLibrary:
     def dn(self):
         return (self.beta(0) - self.beta(1)) / self.solver.k0
 
-    @property
-    def te_ratios(self):
+    @lru_cache()
+    def te_ratio(self, mode_idx: int = 0):
+        if self.ndim != 2:
+            raise AttributeError("ndim must be 2, otherwise te_ratio is 1 or 0.")
         te_ratios = []
-        for h in self.hs:
-            habs = np.abs(h.squeeze())
-            norms = np.asarray((np.linalg.norm(habs[0].flatten()), np.linalg.norm(habs[1].flatten())))
-            te_ratios.append(norms[0] ** 2 / np.sum(norms ** 2))
+        habs = np.abs(self.h(mode_idx).squeeze())
+        norms = np.asarray((np.linalg.norm(habs[0].flatten()), np.linalg.norm(habs[1].flatten())))
+        te_ratios.append(norms[0] ** 2 / np.sum(norms ** 2))
         return np.asarray(te_ratios)
 
-    def fundamental_coeff(self, other_modes: "ModeLibrary"):
-        e_i, h_i = self.e(), self.h()
-        e_o, h_o = other_modes.e(), other_modes.h()
-        return np.sum(poynting_fn(2)(e_o, h_i) + poynting_fn(2)(e_i, h_o)).real
-
-    def plot_sz(self, ax, idx: int = 0, title: str = "Poynting", include_n: bool = False,
+    def plot_sz(self, ax, mode_idx: int = 0, title: str = "Poynting", include_n: bool = False,
                 title_size: float = 16, label_size=16):
-        if idx > self.m - 1:
-            raise ValueError("Out of range of number of solutions")
-        plot_power_2d(ax, np.abs(self.sz(idx).real), self.eps, spacing=self.solver.spacing[0])
-        if include_n:
-            ax.set_title(rf'{title}, $n_{idx + 1} = {self.n(idx):.4f}$', fontsize=title_size)
-        else:
-            ax.set_title(rf'{title}', fontsize=title_size)
-        ax.text(x=0.9, y=0.9, s=rf'$s_z$', color='white', transform=ax.transAxes, fontsize=label_size)
-        ratio = np.max((self.te_ratios[idx], 1 - self.te_ratios[idx]))
-        polarization = "TE" if np.argmax((self.te_ratios[idx], 1 - self.te_ratios[idx])) > 0 else "TM"
-        ax.text(x=0.05, y=0.9, s=rf'{polarization}[{ratio:.2f}]', color='white', transform=ax.transAxes)
-
-    def plot_field(self, ax, idx: int = 0, axis: int = 1, use_e: bool = False, title: str = "Field",
-                   title_size: float = 16, label_size=16, include_n: bool = False):
-        """
+        """Plot sz overlaid on the material
 
         Args:
-            ax: Matplotlib axis handle
-            idx: Mode index
-            axis: Field axis to plot
-            use_e: Use electric field :math:`\mathbf{E}`, else use magnetic field :math:`\mathbf{H}` by default
-            title: Title for the plot (recommended to change for application!)
+            ax: Matplotlib axis handle.
+            mode_idx: Mode index to plot.
+            title: Title of the plot/subplot.
+            include_n: Include the refractive index in the title.
+            title_size: Fontsize of the title.
+            label_size: Fontsize of the label.
 
         Returns:
 
         """
-        field = self.es if use_e else self.hs
+        if mode_idx > self.m - 1:
+            raise ValueError("Out of range of number of solutions")
+        plot_power_2d(ax, np.abs(self.sz(mode_idx).real), self.eps, spacing=self.solver.spacing[0])
+        if include_n:
+            ax.set_title(rf'{title}, $n_{mode_idx + 1} = {self.n(mode_idx):.4f}$', fontsize=title_size)
+        else:
+            ax.set_title(rf'{title}', fontsize=title_size)
+        ax.text(x=0.9, y=0.9, s=rf'$s_z$', color='white', transform=ax.transAxes, fontsize=label_size)
+        ratio = np.max((self.te_ratio(mode_idx), 1 - self.te_ratio(mode_idx)))
+        polarization = "TE" if np.argmax((self.te_ratio(mode_idx), 1 - self.te_ratio(mode_idx))) > 0 else "TM"
+        ax.text(x=0.05, y=0.9, s=rf'{polarization}[{ratio:.2f}]', color='white', transform=ax.transAxes)
+
+    def plot_field(self, ax, idx: int = 0, axis: int = 1, use_h: bool = True, title: str = "Field",
+                   include_n: bool = False, title_size: float = 16, label_size=16):
+        """Plot field overlaid on the material.
+
+        Args:
+            ax: Matplotlib axis handle.
+            idx: Mode index to plot.
+            axis: Field axis to plot.
+            use_h: Plot magnetic field :math:`\\mathbf{H}`.
+            title: Title of the plot/subplot.
+            include_n: Include the refractive index in the title.
+            title_size: Fontsize of the title.
+            label_size: Fontsize of the label.
+
+        Returns:
+
+        """
+        field = self.h(mode_idx=0) if use_h else self.e(mode_idx=0)
         if idx > self.m - 1:
             ValueError("Out of range of number of solutions")
         if not (axis in (0, 1, 2)):
@@ -438,10 +467,10 @@ class ModeLibrary:
             ax.set_title(rf'{title}, $n_{idx + 1} = {self.n(idx):.4f}$', fontsize=title_size)
         else:
             ax.set_title(rf'{title}', fontsize=title_size)
-        ax.text(x=0.9, y=0.9, s=rf'$e_y$' if use_e else rf'$h_y$', color='black', transform=ax.transAxes,
+        ax.text(x=0.9, y=0.9, s=rf'$h_y$' if use_h else rf'$e_y$', color='black', transform=ax.transAxes,
                 fontsize=label_size)
-        ratio = np.max((self.te_ratios[idx], 1 - self.te_ratios[idx]))
-        polarization = "TE" if np.argmax((self.te_ratios[idx], 1 - self.te_ratios[idx])) > 0 else "TM"
+        ratio = np.max((self.te_ratio(idx), 1 - self.te_ratio(idx)))
+        polarization = "TE" if np.argmax((self.te_ratio(idx), 1 - self.te_ratio(idx))) > 0 else "TM"
         ax.text(x=0.05, y=0.9, s=rf'{polarization}[{ratio:.2f}]', color='black', transform=ax.transAxes)
 
     def phase(self, length: float = 1):
@@ -450,14 +479,14 @@ class ModeLibrary:
     def overlap_fundamental(self, other_sol: "ModeLibrary"):
         return overlap(self.e(), self.h(), other_sol.e(), other_sol.h()) ** 2
 
-    def place(self, mode_idx: int, grid: YeeGrid, center: Dim, size: Dim) -> np.ndarray:
+    def place(self, mode_idx: int, grid: YeeGrid, center: Size, size: Size) -> np.ndarray:
         """Place at mode_idx in device with :math:`shape` and :math:`region`.
 
         Args:
-            mode_idx: mode index to use.
-            grid: finite-difference grid to use.
-            center: Specified center
-            size: Specified size
+            mode_idx: Mode index to place.
+            grid: Finite-difference grid to place the mode.
+            center: Specified center for placement.
+            size: Specified size for placement.
 
         Returns:
             Places the mode into the provided grid at the requested center and size, with orientation of the mode
@@ -474,12 +503,12 @@ class ModeLibrary:
         return x
 
     def measure_fn(self, mode_idx: int = 0, use_jax: bool = False, tm_2d: bool = True):
-        """Measure flux
+        """Measure flux provided a mode indexed at :code:`mode_index`.
 
         Args:
-            mode_idx: Use the poynting, mode index
+            mode_idx: Mode index for the measurement.
             use_jax: Use jax.
-            tm_2d: Use TM polarization (only relevant in the case of 2D simulations (i.e., 1D modes))
+            tm_2d: Use TM polarization (only relevant in the case of 2D simulations (i.e., 1D modes)).
 
         Returns:
             A function that takes e, h fields and outputs the a and b terms
@@ -487,6 +516,7 @@ class ModeLibrary:
         """
         poynting = poynting_fn(use_jax=use_jax)
         em, hm = self.e(mode_idx, tm_2d=tm_2d), self.h(mode_idx, tm_2d=tm_2d)
+        print(em.shape, hm.shape)
         sm = np.sum(poynting(em, hm))
         xp = jnp if use_jax else np
 
@@ -495,200 +525,3 @@ class ModeLibrary:
             return xp.array([a + b, a - b])
 
         return _measure
-
-
-class ModeDevice:
-    def __init__(self, wg: MaterialBlock, sub: MaterialBlock, size: Tuple[float, float], wg_height: float,
-                 spacing: float = 0.01, rib_y: float = 0):
-        """A :code:`ModeDevice` can be used to efficiently simulate various scenarios for coupled waveguides
-        and phase shifters.
-
-        Args:
-            wg: Waveguide :code:`MaterialBlock`
-            sub: Substrate :code:`MaterialBlock`
-            size: Size of the overall simulation (in arb. units)
-            wg_height: Size of the overall simulation (in arb. units)
-            spacing: Spacing for the simulation (recommended at least 10 pixels per wavelength in high-index material)
-            rib_y: Rib height (from substrate to partial etch cutoff)
-        """
-        self.size = size
-        self.spacing = spacing
-        self.nx = np.round(self.size[0] / spacing).astype(int)
-        self.ny = np.round(self.size[1] / spacing).astype(int)
-        self.wg_height = wg_height
-        self.wg = wg
-        self.sub = sub
-        self.rib_y = rib_y
-
-    def solve(self, eps: np.ndarray, num_modes: int = 6, wavelength: float = 1.55) -> ModeLibrary:
-        """Solve the modes for the provided epsilon distribution.
-
-        Args:
-            eps: Permittivity distribution for the solver.
-            num_modes: Number of modes to be input into the solver.
-            wavelength: Wavelength for the mode solver.
-
-        Returns:
-            :code:`ModeLibrary` object that solves the.
-
-        """
-        return ModeLibrary(shape=(self.nx, self.ny),
-                           spacing=self.spacing,
-                           wavelength=wavelength,
-                           eps=eps,
-                           num_modes=num_modes)
-
-    def single(self, vert_ps: Optional[MaterialBlock] = None, lat_ps: Optional[MaterialBlock] = None,
-               sep: float = 0) -> np.ndarray:
-        """Single-waveguide permittivity with an optional phase shifter block placed above
-
-        Args:
-            vert_ps: vertical phase shifter block
-            lat_ps: lateral phase shifter block
-            sep: separation betwen phase shifter and waveguide
-
-        Returns:
-            permittivity distribution for the system
-
-        """
-        nx, ny = self.nx, self.ny
-        center = nx // 2
-        wg, sub, dx = self.wg, self.sub, self.spacing
-        wg_y = (self.wg_height, self.wg_height + wg.y)
-
-        xr_wg = (center - int(wg.x / 2 / dx), center - int(wg.x / 2 / dx) + np.round(wg.x / dx).astype(int))
-        yr_wg = slice(int(wg_y[0] / dx), int(wg_y[1] / dx))
-        eps = np.ones((nx, ny))
-        eps[:, :int(self.sub.y / dx)] = sub.material.eps
-        eps[slice(*xr_wg), yr_wg] = wg.material.eps
-        eps[:, int(self.sub.y / dx):int(self.sub.y / dx) + np.round(self.rib_y / dx).astype(int)] = wg.material.eps
-
-        if vert_ps is not None:
-            ps_y = (wg.y + self.wg_height + sep, wg.y + self.wg_height + sep + vert_ps.y)
-            xr_ps = slice(center - int(vert_ps.x / 2 / dx),
-                          center - int(vert_ps.x / 2 / dx) + np.round(vert_ps.x / dx).astype(int))
-            yr_ps = slice(int(ps_y[0] / dx), int(ps_y[1] / dx))
-            eps[xr_ps, yr_ps] = vert_ps.material.eps
-
-        if lat_ps is not None:
-            xrps_l = slice(xr_wg[0] - np.round(lat_ps.x / dx).astype(int) - int(sep / dx),
-                           xr_wg[0] - int(sep / dx))
-            xrps_r = slice(xr_wg[1] + int(sep / dx),
-                           xr_wg[1] + int(sep / dx) + np.round(lat_ps.x / dx).astype(int))
-            eps[xrps_l, yr_wg] = lat_ps.material.eps
-            eps[xrps_r, yr_wg] = lat_ps.material.eps
-
-        return eps
-
-    def coupled(self, gap: float, vert_ps: Optional[MaterialBlock] = None,
-                lat_ps: Optional[MaterialBlock] = None,
-                seps: Tuple[float, float] = (0, 0)) -> np.ndarray:
-        """Coupled-waveguide permittivity with an optional pair of phase shifter blocks placed above
-
-        Args:
-            gap: coupling gap for the interaction region
-            vert_ps: vertical phase shifter :code:`MaterialBlock`
-            lat_ps: lateral phase shifter :code:`MaterialBlock`
-            seps: separation between left and right waveguide in the coupler respectively
-
-        Returns:
-            permittivity distribution for the system
-
-        """
-        nx, ny = self.nx, self.ny
-        center = nx // 2
-        wg, sub, dx = self.wg, self.sub, self.spacing
-        wg_y = (self.wg_height, self.wg_height + wg.y)
-
-        xr_l = (center - int((gap / 2 + wg.x) / dx), center - int(gap / 2 / dx))
-        xr_r = (center + int((gap / 2) / dx), center + int((gap / 2 + wg.x) / dx))
-        yr = slice(int(wg_y[0] / dx), int(wg_y[1] / dx))
-
-        eps = np.ones((nx, ny))
-        eps[:, :int(sub.y / dx)] = sub.eps
-        eps[xr_l[0]:xr_l[1], yr] = wg.eps
-        eps[xr_r[0]:xr_r[1], yr] = wg.eps
-        eps[:, int(self.sub.y / dx):int(self.sub.y / dx) + int(self.rib_y / dx)] = wg.material.eps
-
-        if vert_ps is not None:
-            ps_y = (self.wg.y + self.wg_height + seps[0], self.wg.y + self.wg_height + seps[0] + vert_ps.y)
-            ps_y_2 = (self.wg.y + self.wg_height + seps[1], self.wg.y + self.wg_height + seps[1] + vert_ps.y)
-            wg_l, wg_r = (xr_l[0] + xr_l[1]) / 2, (xr_r[0] + xr_r[1]) / 2
-            xrps_l = slice(int(wg_l - vert_ps.x / dx / 2), int(wg_l + vert_ps.x / dx / 2))
-            xrps_r = slice(int(wg_r - vert_ps.x / dx / 2), int(wg_r + vert_ps.x / dx / 2))
-            yr_ps = slice(int(ps_y[0] / dx), int(ps_y[1] / dx))
-            yr_ps2 = slice(int(ps_y_2[0] / dx), int(ps_y_2[1] / dx))
-            eps[xrps_l, yr_ps] = vert_ps.eps
-            eps[xrps_r, yr_ps2] = vert_ps.eps
-
-        if lat_ps is not None:
-            xrps_l = slice(xr_l[0] - int(lat_ps.x / dx) - int(seps[0] / dx), xr_l[0] - int(seps[0] / dx))
-            xrps_r = slice(xr_r[1] + int(seps[1] / dx), xr_r[1] + int(seps[1] / dx) + int(lat_ps.x / dx))
-            eps[xrps_l, yr] = lat_ps.eps
-            eps[xrps_r, yr] = lat_ps.eps
-
-        return eps
-
-    def dc_grid(self, seps: np.ndarray, gap: float, ps: Optional[MaterialBlock] = None, m: int = 6,
-                pbar: Callable = None) -> List[ModeLibrary]:
-        """Tunable directional coupler grid sweep
-
-        Args:
-            seps: separations to sweep, for :math:`S` separations,
-            the resulting solution grid will be :math:`S \\times S`
-            gap: coupling gap for the interaction region
-            ps: phase shifter :code:`MaterialBlock`
-            m: Number of modes to find
-            pbar: progress bar handle (to show progress using e.g. tqdm)
-
-        Returns:
-            A list of :math:`S^2` :code:`Modes` solution objects
-
-        """
-        solutions = []
-        pbar = range if pbar is None else pbar
-        for sep_1 in pbar(seps):
-            for sep_2 in pbar(seps):
-                eps = self.coupled(gap, ps, seps=(sep_1, sep_2))
-                solutions.append(copy.deepcopy(self.solve(eps, m)))
-        return solutions
-
-    def ps_sweep(self, seps: np.ndarray, ps: Optional[MaterialBlock] = None, m: int = 6,
-                 pbar: Callable = None) -> List[ModeLibrary]:
-        """Phase shifter sweep
-
-        Args:
-            seps: Separations to sweep, for :math:`S` separations, the resulting solution will be of length :math:`S`
-            ps: Phase shifter :code:`MaterialBlock`
-            m: Number of modes to find
-            pbar: Progress bar handle (to show progress using e.g. tqdm)
-
-        Returns:
-            A list of :math:`S` :code:`Modes` solution objects
-
-        """
-        solutions = []
-        pbar = range if pbar is None else pbar
-        for sep in pbar(seps):
-            eps = self.single(ps, sep=sep)
-            solutions.append(copy.deepcopy(self.solve(eps, m)))
-        return solutions
-
-    def dispersion_sweep(self, eps: np.ndarray, wavelengths: np.ndarray, m: int = 6, pbar: Callable = None):
-        """Dispersion sweep for cross sectional modes
-
-        Args:
-            eps: Epsilon distribution for the sweep
-            wavelengths: Wavelengths :math:`\\lambda` of length :math:`L`
-            m: Number of modes to solve
-            pbar: Progress bar handle (to show progress using e.g. tqdm)
-
-        Returns:
-            A list of :math:`L` :code:`Modes` solution objects
-
-        """
-        solutions = []
-        pbar = range if pbar is None else pbar
-        for wavelength in pbar(wavelengths):
-            solutions.append(self.solve(eps, m, wavelength))
-        return solutions

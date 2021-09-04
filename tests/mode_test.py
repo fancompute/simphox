@@ -1,6 +1,6 @@
-from simphox.mode import ModeDevice, ModeSolver, ModeLibrary
-from simphox.material import TEST_ONE, TEST_ZERO, MaterialBlock, SILICON, AIR
-from simphox.typing import Dim2
+from simphox.mode import ModeSolver, ModeLibrary
+from simphox.utils import TEST_ONE, TEST_ZERO, SILICON, AIR, Box
+from simphox.typing import Size2
 
 import pytest
 import numpy as np
@@ -9,95 +9,121 @@ np.random.seed(0)
 
 
 @pytest.mark.parametrize(
-    "core, sub, size, wg_height, spacing, rib_y, lat_ps, vert_ps, sep, expected",
+    "waveguide, sub, size, wg_height, spacing, rib_y, vertical, block, gap, seps, expected",
     [
-        ((0.6, 0.6), (1, 1), (1, 1), 0.2, 0.2, 0, None, None, 0, np.array([
+        (Box((0.2, 0.4), material=TEST_ZERO), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, False,
+         None, 0.2, (0.2, 0.4), np.array(
+            [[1., 1., 1., 1., 1.],
+             [1., 1., 1., 1., 1.],
+             [1., 0., 0., 1., 1.],
+             [1., 1., 1., 1., 1.],
+             [1., 0., 0., 1., 1.],
+             [1., 1., 1., 1., 1.],
+             [1., 1., 1., 1., 1.]]
+        )),
+        (Box((0.2, 0.4), material=TEST_ZERO), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, False,
+         Box((0.2, 0.2), material=TEST_ZERO), 0.2, (0.2, 0.2), np.array([
+            [1, 1, 0, 1, 1],
+            [1, 1, 1, 1, 1],
+            [1, 0, 0, 1, 1],
+            [1, 1, 1, 1, 1],
+            [1, 0, 0, 1, 1],
+            [1, 1, 1, 1, 1],
+            [1, 1, 0, 1, 1]
+        ])),
+        (Box((0.2, 0.4), material=TEST_ZERO), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, True,
+         Box((0.2, 0.2), material=TEST_ZERO), 0.2, (0.2, 0.2), np.array([
+            [1., 1., 1., 1., 1.],
+            [1., 1., 1., 1., 1.],
+            [1., 0., 0., 1., 0.],
+            [1., 1., 1., 1., 1.],
+            [1., 0., 0., 1., 0.],
+            [1., 1., 1., 1., 1.],
+            [1., 1., 1., 1., 1.]
+        ])),
+        (Box((0.6, 0.6), material=TEST_ZERO), (1, 1), (1, 1), 0.2, 0.2, 0, False, None, 0, 0, np.array([
             [1, 1, 1, 1, 1],
             [1, 0, 0, 0, 1],
             [1, 0, 0, 0, 1],
             [1, 0, 0, 0, 1],
             [1, 1, 1, 1, 1]
         ])),
-        ((0.4, 0.4), (1, 1), (1, 1), 0.2, 0.2, 0, None, None, 0, np.array([
+        (Box((0.4, 0.4), material=TEST_ZERO), (1, 1), (1, 1), 0.2, 0.2, 0, False, None, 0, 0, np.array([
             [1, 1, 1, 1, 1],
             [1, 0, 0, 1, 1],
             [1, 0, 0, 1, 1],
             [1, 1, 1, 1, 1],
             [1, 1, 1, 1, 1]
         ])),
-        ((0.4, 0.4), (1, 0.2), (1, 1), 0.2, 0.2, 0.2, None, None, 0, np.array([
+        (Box((0.4, 0.4), material=TEST_ZERO), (1, 0.2), (1, 1), 0.2, 0.2, 0.2, False, None, 0, 0, np.array([
             [1, 0, 1, 1, 1],
             [1, 0, 0, 1, 1],
             [1, 0, 0, 1, 1],
             [1, 0, 1, 1, 1],
             [1, 0, 1, 1, 1]
         ])),
-        ((0.2, 0.4), (1, 0.2), (1, 1), 0.2, 0.2, 0, (0.2, 0.4), None, 0.2, np.array([
+        (Box((0.2, 0.4), material=TEST_ZERO), (1, 0.2), (1, 1), 0.2, 0.2, 0, False,
+         Box((0.2, 0.4), material=TEST_ZERO), 0, 0.2, np.array([
             [1, 0, 0, 1, 1],
             [1, 1, 1, 1, 1],
             [1, 0, 0, 1, 1],
             [1, 1, 1, 1, 1],
             [1, 0, 0, 1, 1]
         ])),
-        ((0.4, 0.2), (1, 0.2), (1, 1), 0.2, 0.2, 0, None, (0.4, 0.2), 0.2, np.array([
-            [1, 1, 1, 1, 1],
-            [1, 0, 1, 0, 1],
-            [1, 0, 1, 0, 1],
-            [1, 1, 1, 1, 1],
-            [1, 1, 1, 1, 1]
+        (Box((0.4, 0.2), material=TEST_ZERO), (1, 0.2), (1, 1), 0.2, 0.2, 0, True,
+         Box((0.4, 0.2), material=TEST_ZERO), 0, 0.2, np.array([
+            [1., 1., 1., 1., 1.],
+            [1., 1., 0., 1., 0.],
+            [1., 1., 0., 1., 0.],
+            [1., 1., 1., 1., 1.],
+            [1., 1., 1., 1., 1.]
         ])),
     ],
 )
-def test_single_eps_matches_expected(core: Dim2, sub: Dim2, size: Dim2,
-                                     wg_height: float, spacing: float, rib_y: float, lat_ps: Dim2,
-                                     vert_ps: Dim2, sep: float, expected: np.ndarray):
-    device = ModeDevice(MaterialBlock(core, TEST_ZERO), MaterialBlock(sub, TEST_ONE),
-                        size, wg_height, spacing, rib_y)
-    lat_ps = MaterialBlock(lat_ps, TEST_ZERO) if lat_ps is not None else None
-    vert_ps = MaterialBlock(vert_ps, TEST_ZERO) if vert_ps is not None else None
-    np.testing.assert_allclose(device.single(lat_ps=lat_ps, sep=sep, vert_ps=vert_ps), expected)
-
-
-@pytest.mark.parametrize(
-    "core, sub, size, wg_height, spacing, rib_y, lat_ps, vert_ps, gap, seps, expected",
-    [
-        ((0.2, 0.4), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, (0.2, 0.2), None, 0.2, (0.2, 0.4), np.array([
-            [1, 0, 0, 1, 1],
-            [1, 1, 1, 1, 1],
-            [1, 0, 0, 1, 1],
-            [1, 0, 0, 1, 1],
-            [1, 1, 1, 1, 1],
-            [1, 1, 1, 1, 1],
-            [1, 0, 0, 1, 1]
-        ])),
-    ],
-)
-def test_coupled_eps_matches_expected(core: Dim2, sub: Dim2, size: Dim2, wg_height: float, spacing: float,
-                                      rib_y: float, lat_ps: Dim2, vert_ps: Dim2, gap: float,
-                                      seps: Dim2, expected: np.ndarray):
-    device = ModeDevice(MaterialBlock(core, TEST_ZERO), MaterialBlock(sub, TEST_ONE),
-                        size, wg_height, spacing, rib_y)
-    lat_ps = MaterialBlock(lat_ps, TEST_ZERO) if lat_ps is not None else None
-    vert_ps = MaterialBlock(vert_ps, TEST_ZERO) if vert_ps is not None else None
-    actual = device.coupled(gap=gap, lat_ps=lat_ps, seps=seps, vert_ps=vert_ps)
+def test_block_design_eps_matches_expected(waveguide: Box, sub: Size2, size: Size2, wg_height: float, spacing: float,
+                                           rib_y: float, vertical: bool, block: Box, gap: float,
+                                           seps: Size2, expected: np.ndarray):
+    actual = ModeSolver(size, spacing).block_design(waveguide=waveguide,
+                                                    wg_height=wg_height,
+                                                    sub_height=wg_height,
+                                                    sub_eps=TEST_ONE.eps,
+                                                    coupling_gap=gap,
+                                                    rib_y=rib_y,
+                                                    block=block,
+                                                    vertical=vertical,
+                                                    sep=seps
+                                                    ).eps
     np.testing.assert_allclose(actual, expected)
 
 
 @pytest.mark.parametrize(
-    "core, sub, size, wg_height, spacing, rib_y, lat_ps, vert_ps, gap, seps, expected_max, expected_mean",
+    "waveguide, sub, size, wg_height, spacing, rib_y, vertical, block, gap, seps, expected_beta",
     [
-        ((0.2, 0.4), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, (0.2, 0.2), None, 0.2, (0.2, 0.4), 0.456573, 0.044715),
-        ((0.2, 0.4), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, None, None, 0.2, (0, 0), 0.658336, 0.034605),
-        ((0.2, 0.4), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, None, (0.2, 0.2), 0.2, (0.2, 0.4), 0.65787, 0.034798),
+        (Box((0.2, 0.4), material=SILICON), Box((1.4, 0.2), material=AIR),
+         (1.4, 1), 0.2, 0.2, 0, False, Box((0.2, 0.2), material=SILICON), 0.2, (0.2, 0.4), [8.511193, 8.208999,
+                                                                                            7.785885, 6.190572,
+                                                                                            5.509391, 4.78587]),
+        (Box((0.2, 0.4), material=SILICON), Box((1.4, 0.2), material=AIR),
+         (1.4, 1), 0.2, 0.2, 0, False, None, 0.2, (0, 0), [8.497423, 8.193003,
+                                                           7.732571, 5.94686,
+                                                           5.247048, 3.93605]),
+        (Box((0.2, 0.4), material=SILICON), Box((1.4, 0.2), material=AIR),
+         (1.4, 1), 0.2, 0.2, 0, True, Box((0.2, 0.2), material=SILICON), 0.2, (0.2, 0.4), [8.539984, 8.22446,
+                                                                                           7.776173, 6.022444,
+                                                                                           5.283903, 4.618694]),
     ],
 )
-def test_mode_matches_expected_max_mean(core: Dim2, sub: Dim2, size: Dim2, wg_height: float, spacing: float,
-                                        rib_y: float, lat_ps: Dim2, vert_ps: Dim2, gap: float, seps: Dim2,
-                                        expected_max: float, expected_mean: float):
-    device = ModeDevice(MaterialBlock(core, SILICON), MaterialBlock(sub, AIR), size, wg_height, spacing, rib_y)
-    lat_ps = MaterialBlock(lat_ps, SILICON) if lat_ps is not None else None
-    vert_ps = MaterialBlock(vert_ps, SILICON) if vert_ps is not None else None
-    eps = device.coupled(gap=gap, lat_ps=lat_ps, seps=seps, vert_ps=vert_ps)
-    actual = device.solve(eps).modes[0]
-    np.testing.assert_allclose(np.max(actual), expected_max, atol=1e-6)
-    np.testing.assert_allclose(np.mean(actual), expected_mean, atol=1e-6)
+def test_mode_matches_expected_beta(waveguide: Box, sub: Box, size: Size2, wg_height: float, spacing: float,
+                                    rib_y: float, vertical: bool, block: Box, gap: float, seps: Size2,
+                                    expected_beta: float):
+    actual_beta, _ = ModeSolver(size, spacing).block_design(waveguide=waveguide,
+                                                            wg_height=wg_height,
+                                                            sub_height=wg_height,
+                                                            sub_eps=TEST_ONE.eps,
+                                                            coupling_gap=gap,
+                                                            rib_y=rib_y,
+                                                            block=block,
+                                                            vertical=vertical,
+                                                            sep=seps
+                                                            ).solve()
+    np.testing.assert_allclose(actual_beta, expected_beta, atol=1e-6)

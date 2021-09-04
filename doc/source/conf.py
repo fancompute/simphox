@@ -37,7 +37,12 @@ extensions = [
     'sphinx.ext.autodoc',
     'sphinx_autodoc_typehints',
     'sphinx.ext.viewcode',
-    'sphinx.ext.inheritance_diagram'
+    'sphinx.ext.inheritance_diagram',
+    'myst_parser'
+]
+
+myst_enable_extensions = [
+  "colon_fence",
 ]
 
 mathjax_path = "https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML"
@@ -66,6 +71,7 @@ html_theme_options = {
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
+html_logo = "https://user-images.githubusercontent.com/7623867/131265616-4e438679-f3b6-4a9f-b401-130a41cb8ab7.png"
 
 
 def setup(app):

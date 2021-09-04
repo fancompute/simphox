@@ -1,19 +1,16 @@
-from functools import lru_cache
-
-import numpy as np
-import scipy.sparse as sp
-from scipy.sparse.linalg import eigs
 from typing import Tuple
 
-from .sim import SimGrid
-from .typing import Shape, Dim, GridSpacing, Optional, Union, Dim3
+import numpy as np
 from scipy.linalg import solve_banded
+
+from .sim import SimGrid
+from .typing import Shape, Size, GridSpacing, Optional, Union, Size3
 
 
 class BPM(SimGrid):
-    def __init__(self, shape: Shape, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
-                 wavelength: float = 1.55, bloch_phase: Union[Dim, float] = 0.0,
-                 pml: Optional[Union[Shape, Dim]] = None, pml_params: Dim3 = (4, -16, 1),
+    def __init__(self, size: Size, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
+                 wavelength: float = 1.55, bloch_phase: Union[Size, float] = 0.0,
+                 pml: Optional[Union[Shape, Size]] = None, pml_params: Size3 = (4, -16, 1),
                  yee_avg: bool = True, no_grad: bool = True):
 
         self.wavelength = wavelength
@@ -21,7 +18,7 @@ class BPM(SimGrid):
         self.no_grad = no_grad
 
         super(BPM, self).__init__(
-            shape=shape,
+            size=size,
             spacing=spacing,
             eps=eps,
             bloch_phase=bloch_phase,
