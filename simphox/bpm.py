@@ -4,11 +4,11 @@ import numpy as np
 from scipy.linalg import solve_banded
 
 from .sim import SimGrid
-from .typing import Shape, Size, GridSpacing, Optional, Union, Size3
+from .typing import Shape, Size, Spacing, Optional, Union, Size3
 
 
 class BPM(SimGrid):
-    def __init__(self, size: Size, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
+    def __init__(self, size: Size, spacing: Spacing, eps: Union[float, np.ndarray] = 1,
                  wavelength: float = 1.55, bloch_phase: Union[Size, float] = 0.0,
                  pml: Optional[Union[Shape, Size]] = None, pml_params: Size3 = (4, -16, 1),
                  yee_avg: bool = True, no_grad: bool = True):

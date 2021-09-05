@@ -46,7 +46,7 @@ def test_df_pml_selected_indices(size: Size, spacing: Size, pml: Optional[Size],
                                  selected_indices: List[int],
                                  expected_df_data: np.ndarray, expected_df_indices: np.ndarray):
     grid = FDFD(size, spacing, pml=pml, pml_params=pml_params)
-    actual_df = grid.df
+    actual_df = grid.deriv_forward
     np.testing.assert_allclose(actual_df[0].data[selected_indices], expected_df_data)
     np.testing.assert_allclose(actual_df[0].indices[selected_indices], expected_df_indices)
 
@@ -73,7 +73,7 @@ def test_db_pml_selected_indices(size: Size, spacing: Size, pml: Optional[Size],
                                  selected_indices: List[int],
                                  expected_db_data: np.ndarray, expected_db_indices: np.ndarray):
     grid = FDFD(size, spacing, pml=pml, pml_params=pml_params)
-    actual_db = grid.db
+    actual_db = grid.deriv_backward
     np.testing.assert_allclose(actual_db[0].data[selected_indices], expected_db_data)
     np.testing.assert_allclose(actual_db[0].indices[selected_indices], expected_db_indices)
 

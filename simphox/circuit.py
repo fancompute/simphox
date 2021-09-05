@@ -26,7 +26,7 @@ class Component:
     def from_fdfd(cls, pattern: Pattern, core_eps: float, clad_eps: float, spacing: float, wavelengths: Iterable[float],
                   boundary: Size, pml: float, name: str, in_ports: Optional[List[str]] = None,
                   out_ports: Optional[List[str]] = None, component_t: float = 0, component_zmin: Optional[float] = None,
-                  rib_t: float = 0, sub_z: float = 0, height: float = 0, bg_eps: float = 1, profile_size_factor: int = 2,
+                  rib_t: float = 0, sub_z: float = 0, height: float = 0, bg_eps: float = 1, profile_size_factor: int = 3,
                   pbar: Optional[Callable] = None):
         """From FDFD, this classmethod produces a component model based on a provided pattern
         and simulation attributes (currently configured for scalar photonics problems).

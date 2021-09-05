@@ -78,7 +78,7 @@ def plot_field_2d(ax, field: np.ndarray, eps: Optional[np.ndarray] = None, spaci
     if eps is not None:
         plot_eps_2d(ax, eps, spacing, mat_cmap)
     im_val = field * np.sign(field.flat[np.abs(field).argmax()])
-    norm = mcolors.DivergingNorm(vcenter=0, vmin=-im_val.max(), vmax=im_val.max())
+    norm = mcolors.TwoSlopeNorm(vcenter=0, vmin=-im_val.max(), vmax=im_val.max())
     ax.imshow(im_val.T, cmap=cmap, origin='lower', alpha=alpha, extent=extent, norm=norm)
 
 

@@ -55,6 +55,7 @@ ETCH = Material('Etch')
 
 TEST_ZERO = Material('Zero', 0, (0, 0, 0))
 TEST_ONE = Material('One', 1, (0, 0, 0))
+TEST_INF = Material('Inf', 1e10, (0, 0, 0))
 
 
 @fix_dataclass_init_docs

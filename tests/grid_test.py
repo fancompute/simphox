@@ -1,8 +1,8 @@
 import pytest
 from typing import List, Tuple, Union, Optional
 
-from simphox.typing import Shape, Size, Size3
-
+from simphox.typing import Shape, Size, Size2, Size3
+from simphox.utils import TEST_ZERO, TEST_ONE, Box
 from simphox.grid import Grid, YeeGrid
 
 import numpy as np
@@ -22,7 +22,7 @@ import numpy as np
 def test_cell_size(size: Size, spacing: Size, eps: Union[float, np.ndarray],
                    expected_cell_sizes: List[np.ndarray]):
     grid = Grid(size, spacing, eps)
-    for actual, expected in zip(grid.cell_sizes, expected_cell_sizes):
+    for actual, expected in zip(grid.cells, expected_cell_sizes):
         np.testing.assert_allclose(actual, expected)
 
 
@@ -124,7 +124,8 @@ def test_spacing3(sim_spacing3: Size, spacing: Size, size: Size):
     [
         ((2.5, 2.5, 1), 0.5, (1, 1, 1), (0.5, 1, 1), True, [slice(2, 3, None), slice(1, 3, None), slice(1, 3, None)]),
         ((2.5, 2.5, 1), 0.5, (1, 1, 1), (0.5, 0.1, 1), True, [slice(2, 3, None), 2, slice(1, 3, None)]),
-        ((2.5, 2.5, 1), 0.5, (1, 1, 1), (0.5, 0.1, 1), False, [slice(2, 3, None), slice(2, 3, None), slice(1, 3, None)]),
+        (
+        (2.5, 2.5, 1), 0.5, (1, 1, 1), (0.5, 0.1, 1), False, [slice(2, 3, None), slice(2, 3, None), slice(1, 3, None)]),
         ((1, 1), 0.2, (1, 1, 0), (0.5, 1, 1), True, [slice(4, 6, None), slice(3, 8, None), 0]),
     ],
 )
@@ -160,7 +161,7 @@ def test_slice(sim_size: Shape, spacing: Size, center: Size3, size: Size3, squee
 def test_df(size: Size, spacing: Size, pml: Optional[Size3], expected_df_data: np.ndarray,
             expected_df_indices: np.ndarray):
     grid = YeeGrid(size, spacing, pml=pml)
-    actual_df = grid.df
+    actual_df = grid.deriv_forward
     np.testing.assert_allclose(actual_df[0].data, expected_df_data)
     np.testing.assert_allclose(actual_df[0].indices, expected_df_indices)
 
@@ -169,9 +170,9 @@ def test_df(size: Size, spacing: Size, pml: Optional[Size3], expected_df_data: n
     "size, spacing, pml, expected_db_data, expected_db_indices",
     [
         ((1.5, 1.5, 1), 0.5, None,
-         [-2.,  2., -2.,  2., -2.,  2., -2.,  2., -2.,  2., -2.,  2.,  2.,
-          -2.,  2., -2.,  2., -2.,  2., -2.,  2., -2.,  2., -2.,  2., -2.,
-          2., -2.,  2., -2.,  2., -2.,  2., -2.,  2., -2.],
+         [-2., 2., -2., 2., -2., 2., -2., 2., -2., 2., -2., 2., 2.,
+          -2., 2., -2., 2., -2., 2., -2., 2., -2., 2., -2., 2., -2.,
+          2., -2., 2., -2., 2., -2., 2., -2., 2., -2.],
          [12, 0, 13, 1, 14, 2, 15, 3, 16, 4, 17, 5, 6, 0, 7, 1, 8,
           2, 9, 3, 10, 4, 11, 5, 12, 6, 13, 7, 14, 8, 15, 9, 16, 10,
           17, 11]
@@ -190,6 +191,94 @@ def test_df(size: Size, spacing: Size, pml: Optional[Size3], expected_df_data: n
 def test_db(size: Size, spacing: Size, pml: Optional[Size3], expected_db_data: np.ndarray,
             expected_db_indices: np.ndarray):
     grid = YeeGrid(size, spacing, pml=pml)
-    actual_db = grid.db
+    actual_db = grid.deriv_backward
     np.testing.assert_allclose(actual_db[0].data, expected_db_data)
     np.testing.assert_allclose(actual_db[0].indices, expected_db_indices)
+
+
+@pytest.mark.parametrize(
+    "waveguide, sub, size, wg_height, spacing, rib_y, vertical, block, gap, seps, expected",
+    [
+        (Box((0.2, 0.4), material=TEST_ZERO), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, False,
+         None, 0.2, (0.2, 0.4), np.array(
+            [[1., 1., 1., 1., 1.],
+             [1., 1., 1., 1., 1.],
+             [1., 0., 0., 1., 1.],
+             [1., 1., 1., 1., 1.],
+             [1., 0., 0., 1., 1.],
+             [1., 1., 1., 1., 1.],
+             [1., 1., 1., 1., 1.]]
+        )),
+        (Box((0.2, 0.4), material=TEST_ZERO), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, False,
+         Box((0.2, 0.2), material=TEST_ZERO), 0.2, (0.2, 0.2), np.array([
+            [1, 1, 0, 1, 1],
+            [1, 1, 1, 1, 1],
+            [1, 0, 0, 1, 1],
+            [1, 1, 1, 1, 1],
+            [1, 0, 0, 1, 1],
+            [1, 1, 1, 1, 1],
+            [1, 1, 0, 1, 1]
+        ])),
+        (Box((0.2, 0.4), material=TEST_ZERO), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, True,
+         Box((0.2, 0.2), material=TEST_ZERO), 0.2, (0.2, 0.2), np.array([
+            [1., 1., 1., 1., 1.],
+            [1., 1., 1., 1., 1.],
+            [1., 0., 0., 1., 0.],
+            [1., 1., 1., 1., 1.],
+            [1., 0., 0., 1., 0.],
+            [1., 1., 1., 1., 1.],
+            [1., 1., 1., 1., 1.]
+        ])),
+        (Box((0.6, 0.6), material=TEST_ZERO), (1, 1), (1, 1), 0.2, 0.2, 0, False, None, 0, 0, np.array([
+            [1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1]
+        ])),
+        (Box((0.4, 0.4), material=TEST_ZERO), (1, 1), (1, 1), 0.2, 0.2, 0, False, None, 0, 0, np.array([
+            [1, 1, 1, 1, 1],
+            [1, 0, 0, 1, 1],
+            [1, 0, 0, 1, 1],
+            [1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1]
+        ])),
+        (Box((0.4, 0.4), material=TEST_ZERO), (1, 0.2), (1, 1), 0.2, 0.2, 0.2, False, None, 0, 0, np.array([
+            [1, 0, 1, 1, 1],
+            [1, 0, 0, 1, 1],
+            [1, 0, 0, 1, 1],
+            [1, 0, 1, 1, 1],
+            [1, 0, 1, 1, 1]
+        ])),
+        (Box((0.2, 0.4), material=TEST_ZERO), (1, 0.2), (1, 1), 0.2, 0.2, 0, False,
+         Box((0.2, 0.4), material=TEST_ZERO), 0, 0.2, np.array([
+            [1, 0, 0, 1, 1],
+            [1, 1, 1, 1, 1],
+            [1, 0, 0, 1, 1],
+            [1, 1, 1, 1, 1],
+            [1, 0, 0, 1, 1]
+        ])),
+        (Box((0.4, 0.2), material=TEST_ZERO), (1, 0.2), (1, 1), 0.2, 0.2, 0, True,
+         Box((0.4, 0.2), material=TEST_ZERO), 0, 0.2, np.array([
+            [1., 1., 1., 1., 1.],
+            [1., 1., 0., 1., 0.],
+            [1., 1., 0., 1., 0.],
+            [1., 1., 1., 1., 1.],
+            [1., 1., 1., 1., 1.]
+        ])),
+    ],
+)
+def test_block_design_eps_matches_expected(waveguide: Box, sub: Size2, size: Size2, wg_height: float, spacing: float,
+                                           rib_y: float, vertical: bool, block: Box, gap: float,
+                                           seps: Size2, expected: np.ndarray):
+    actual = Grid(size, spacing).block_design(waveguide=waveguide,
+                                              wg_height=wg_height,
+                                              sub_height=wg_height,
+                                              sub_eps=TEST_ONE.eps,
+                                              coupling_gap=gap,
+                                              rib_y=rib_y,
+                                              block=block,
+                                              vertical=vertical,
+                                              sep=seps
+                                              ).eps
+    np.testing.assert_allclose(actual, expected)

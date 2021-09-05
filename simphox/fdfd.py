@@ -1,6 +1,6 @@
 from .sim import SimGrid
 from .utils import d2curl_op, yee_avg_jax
-from .typing import Shape, Size, GridSpacing, Optional, Tuple, Union, SpSolve, Shape2, Size2, List, Callable, Dict, Size3
+from .typing import Shape, Size, Spacing, Optional, Tuple, Union, SpSolve, Shape2, Size2, List, Callable, Dict, Size3
 
 import numpy as np
 import scipy.sparse as sp
@@ -71,12 +71,11 @@ class FDFD(SimGrid):
         bloch_phase: Bloch phase (generally useful for angled scattering sims, not yet implemented!)
         pml: Perfectly matched layer (PML) of thickness on both sides of the form :code:`(x_pml, y_pml, z_pml)`
         pml_params: The PML parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
-        yee_avg: whether to do a yee average (highly recommended)
     """
-    def __init__(self, size: Size, spacing: GridSpacing,
+    def __init__(self, size: Size, spacing: Spacing,
                  wavelength: float = 1.55, eps: Union[float, np.ndarray] = 1,
                  bloch_phase: Union[Size, float] = 0.0, pml: Optional[Union[int, Shape, Size]] = None,
-                 pml_params: Size3 = (4, -16, 1.0), yee_avg: bool = True, name: str = 'fdfd'):
+                 pml_params: Size3 = (4, -16, 1.0), name: str = 'fdfd'):
 
         super(FDFD, self).__init__(
             size=size,
@@ -85,7 +84,6 @@ class FDFD(SimGrid):
             bloch_phase=bloch_phase,
             pml=pml,
             pml_params=pml_params,
-            yee_avg=yee_avg,
             name=name
         )
 
@@ -97,8 +95,8 @@ class FDFD(SimGrid):
             dxes_pml_e, dxes_pml_h = [], []
             for ax, p in enumerate(self.pos):
                 scpml_e, scpml_h = self.scpml(ax)
-                dxes_pml_e.append(self.cell_sizes[ax] * scpml_e)
-                dxes_pml_h.append(self.cell_sizes[ax] * scpml_h)
+                dxes_pml_e.append(self.cells[ax] * scpml_e)
+                dxes_pml_h.append(self.cells[ax] * scpml_h)
             self._dxes = np.meshgrid(*dxes_pml_e, indexing='ij'), np.meshgrid(*dxes_pml_h, indexing='ij')
 
     @classmethod
@@ -133,7 +131,7 @@ class FDFD(SimGrid):
         Returns:
             Electric field operator :math:`A` for solving Maxwell's equations at frequency :math:`omega`.
         """
-        curl_curl: sp.spmatrix = d2curl_op(self.db) @ d2curl_op(self.df)
+        curl_curl: sp.spmatrix = d2curl_op(self.deriv_backward) @ d2curl_op(self.deriv_forward)
         curl_curl.sort_indices()  # for the solver
         mat = curl_curl - self.k0 ** 2 * sp.diags(self.eps_t.flatten())
         return mat
@@ -147,7 +145,7 @@ class FDFD(SimGrid):
         Returns:
             Electric field operator :math:`A_z` for a source with ez-polarized field.
         """
-        df, db = self.df, self.db
+        df, db = self.deriv_forward, self.deriv_backward
         ddz = -db[0] @ df[0] - db[1] @ df[1]
         ddz.sort_indices()  # for the solver
         mat = ddz - self.k0 ** 2 * sp.diags(self.eps_t[2].flatten())
@@ -160,7 +158,7 @@ class FDFD(SimGrid):
         Returns:
             Magnetic field operator :math:`A_z` for a source with hz-polarized field.
         """
-        df, db = self.df, self.db
+        df, db = self.deriv_forward, self.deriv_backward
         t0, t1 = sp.diags(1 / self.eps_t[0].flatten()), sp.diags(1 / self.eps_t[1].flatten())
         mat = -db[0] @ t1 @ df[0] - db[1] @ t0 @ df[1] - self.k0 ** 2 * sp.identity(self.n)
         return mat
@@ -178,7 +176,7 @@ class FDFD(SimGrid):
         Returns:
             The h-field converted from the e-field.
         """
-        return self.curl_e(beta)(self.reshape(e)) / (1j * self.k0)
+        return self.curl_fn(of_h=False, beta=beta)(self.reshape(e)) / (1j * self.k0)
 
     def h2e(self, h: np.ndarray, beta: Optional[float] = None) -> np.ndarray:
         """Convert magnetic field :math:`\\mathbf{h}` to electric field :math:`\\mathbf{e}`.
@@ -193,7 +191,7 @@ class FDFD(SimGrid):
         Returns:
             The e-field converted from the h-field.
         """
-        return self.curl_h(beta)(self.reshape(h)) / (1j * self.k0 * self.eps_t)
+        return self.curl_fn(of_h=True, beta=beta)(self.reshape(h)) / (1j * self.k0 * self.eps_t)
 
     def solve(self, src: np.ndarray, solver_fn: Optional[SpSolve] = None,
               iterative: int = -1, tm_2d: bool = True, callback: Optional[Callable] = None) -> np.ndarray:
@@ -221,7 +219,7 @@ class FDFD(SimGrid):
             else:
                 e = solver_fn(self.mat, b) if solver_fn else spsolve_pardiso(self.mat, b)
             e = self.reshape(e)
-            curl_e = curl_fn(self.diff_fn(use_h=False))
+            curl_e = curl_fn(self.diff_fn(of_h=False))
             h = curl_e(e) / (1j * self.k0)
             return np.array((e, h))
         else:  # assume only the z component
@@ -231,7 +229,7 @@ class FDFD(SimGrid):
             fz = solver_fn(mat, b) if solver_fn else spsolve_pardiso(mat, b)
             o = np.zeros_like(fz)
             field = np.vstack((o, o, fz)).reshape((3, *self.shape3))
-            df = self.diff_fn(use_h=tm_2d, use_jax=False)
+            df = self.diff_fn(of_h=tm_2d, use_jax=False)
             eps_t = self.eps_t
             if tm_2d:
                 h = field
@@ -244,7 +242,7 @@ class FDFD(SimGrid):
 
     def scpml(self, ax: int) -> Tuple[np.ndarray, np.ndarray]:
         exp_scale, log_reflection, pml_eps = self.pml_params
-        if self.cell_sizes[ax].size == 1:
+        if self.cells[ax].size == 1:
             return np.ones(1), np.ones(1)
         p = self.pos[ax]
         pe, ph = (p[:-1] + p[1:]) / 2, p[:-1]
@@ -358,11 +356,11 @@ class FDFD(SimGrid):
                 constant_term_indices = jnp.stack((jnp.arange(self.n), jnp.arange(self.n)))
 
                 # this is temporary while we wait for sparse-sparse support in JAX.
-                operator = TMOperator(self.df, self.db)
+                operator = TMOperator(self.deriv_forward, self.deriv_backward)
                 x_op = operator.compile_operator_along_axis(0)
                 y_op = operator.compile_operator_along_axis(1)
                 x_ind, y_ind = operator.x_indices, operator.y_indices
-                dh = self.diff_fn(use_h=True, use_jax=True)
+                dh = self.diff_fn(of_h=True, use_jax=True)
 
                 @jax.jit
                 def solve(rho: jnp.ndarray):
@@ -379,11 +377,11 @@ class FDFD(SimGrid):
 
             else:
                 # exact 2d FDFD for TE polarization
-                df, db = self.df, self.db
+                df, db = self.deriv_forward, self.deriv_backward
                 ddz = -db[0] @ df[0] - db[1] @ df[1]
                 ddz_entries, ddz_indices = coo_to_jnp(ddz)
                 mat_indices = jnp.hstack((jnp.vstack((jnp.arange(self.n), jnp.arange(self.n))), ddz_indices))
-                de = self.diff_fn(use_h=False, use_jax=True)
+                de = self.diff_fn(of_h=False, use_jax=True)
 
                 @jax.jit
                 def solve(rho: jnp.ndarray):
@@ -396,8 +394,8 @@ class FDFD(SimGrid):
                     return jnp.stack((e, h))
         else:
             # iterative 3d FDFD (simpler than 2D code-wise, but takes way more memory and time)
-            curl_e = curl_fn(self.diff_fn(use_h=False, use_jax=True), use_jax=True)
-            curl_h = curl_fn(self.diff_fn(use_h=True, use_jax=True), use_jax=True)
+            curl_e = curl_fn(self.diff_fn(of_h=False, use_jax=True), use_jax=True)
+            curl_h = curl_fn(self.diff_fn(of_h=True, use_jax=True), use_jax=True)
 
             def op(eps: jnp.ndarray):
                 return lambda b: curl_h(curl_e(b.reshape(field_shape))) - k0 ** 2 * eps * b.reshape(field_shape)

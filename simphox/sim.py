@@ -4,7 +4,7 @@ import jax.numpy as jnp
 
 from .grid import YeeGrid
 from .mode import ModeSolver, ModeLibrary
-from .typing import GridSpacing, Shape, Union, Size, Optional, List, Tuple, Shape2, Size2, Dict, Size3, Callable, \
+from .typing import Spacing, Shape, Union, Size, Optional, List, Tuple, Shape2, Size2, Dict, Size3, Callable, \
     MeasureInfo, Op, PortLabel
 from .utils import fix_dataclass_init_docs
 from .viz import get_extent_2d
@@ -40,9 +40,9 @@ class SimCrossSection:
 
 
 class SimGrid(YeeGrid):
-    def __init__(self, size: Size, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
+    def __init__(self, size: Size, spacing: Spacing, eps: Union[float, np.ndarray] = 1,
                  bloch_phase: Union[Size, float] = 0.0, pml: Optional[Union[int, Shape, Size]] = None,
-                 pml_params: Size3 = (4, -16, 1.0), yee_avg: int = 1, use_jax: bool = False, name: str = 'simgrid'):
+                 pml_params: Size3 = (4, -16, 1.0), use_jax: bool = False, name: str = 'simgrid'):
         """The base :code:`SimGrid` class (adding things to :code:`Grid` like Yee grid support, Bloch phase,
         PML shape, etc.).
 
@@ -53,9 +53,8 @@ class SimGrid(YeeGrid):
             bloch_phase: Bloch phase (generally useful for angled scattering sims)
             pml: Perfectly matched layer (PML) of thickness on both sides of the form :code:`(x_pml, y_pml, z_pml)`
             pml_params: The parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
-            yee_avg: whether to do a yee average (highly recommended)
         """
-        super(SimGrid, self).__init__(size, spacing, eps, bloch_phase, pml, pml_params, yee_avg, name)
+        super(SimGrid, self).__init__(size, spacing, eps, bloch_phase, pml, pml_params, name)
         self.use_jax = use_jax
 
     def modes(self, center: Size3, size: Size3, wavelength: float = 1.55, num_modes: int = 1) -> SimCrossSection:
@@ -71,9 +70,10 @@ class SimGrid(YeeGrid):
             A Tuple of a Modes object and view function for measuring the fields.
         """
         mode_eps = self.eps.reshape(self.shape3)[self.slice(center, size)].squeeze()
-        mode_size = tuple(np.around(np.array(mode_eps.shape) * self.spacing[0]).astype(int))
+        mode_size = tuple(np.array(mode_eps.shape) * self.spacing[0])
         modes = ModeLibrary(
-            size=mode_size, spacing=self.spacing[0], eps=mode_eps, wavelength=wavelength, num_modes=num_modes
+            ModeSolver(size=mode_size, spacing=self.spacing[0], eps=mode_eps, wavelength=wavelength),
+            num_modes=num_modes
         )
         return SimCrossSection(modes, center, size)
 
@@ -181,7 +181,7 @@ class SimGrid(YeeGrid):
     #     return lambda tt: src[tt // dt]
 
     def port_modes(self, excitation: List[Tuple[str, int]] = None,
-                   profile_size_factor: float = 2) -> Dict[PortLabel, SimCrossSection]:
+                   profile_size_factor: float = 3) -> Dict[PortLabel, SimCrossSection]:
         """Profile for all the ports in the grid (always assumed to be along x or y axes!).
 
         Args:
@@ -195,13 +195,13 @@ class SimGrid(YeeGrid):
         """
 
         excitation = [(port, 0) for port in self.port] if excitation is None else excitation
-        return {name: self.modes(center=self.pml_safe_placement(*p.xyz), size=p.size * profile_size_factor,
+        return {name: self.modes(center=self.pml_safe_placement(p.xyz), size=p.size * profile_size_factor,
                                  num_modes=np.max([mode_idx
                                                    for port_name, mode_idx in excitation if port_name == name]) + 1)
                 for name, p in self.port.items()}
 
     def port_source(self, source: Optional[Union[Dict[Tuple[str, int], float], Dict[str, float]]] = None,
-                    profile_size_factor: float = 2, unidirectional: bool = True) -> np.ndarray:
+                    profile_size_factor: float = 3, unidirectional: bool = True) -> np.ndarray:
         """Return a non-sparse source array based on the ports defined in the simulation grid.
 
         Args:
@@ -225,10 +225,11 @@ class SimGrid(YeeGrid):
 
         sources_to_sum = []
         for port_mode, weight in source.items():
-            axis = int(np.mod(self.port[port_mode[0]].a, np.pi) == np.pi / 2)
-            beta = source_library[port_mode[0]].io.betas[port_mode[1]]
-            shift = 2 * (np.mod(self.port[port_mode[0]].a, 2 * np.pi) < np.pi) - 1
-            src = source_library[port_mode[0]].place(port_mode[1], self) * weight
+            port, mode = port_mode
+            axis = int(np.mod(self.port[port].a, np.pi) == np.pi / 2)
+            beta = source_library[port].io.betas[mode]
+            shift = 2 * (np.mod(self.port[port].a, 360) < 180) - 1
+            src = source_library[port].place(mode, self) * weight
             src = np.roll(src, axis=axis, shift=2 * shift)
             if unidirectional:
                 src += np.roll(src, axis=axis, shift=shift) * np.exp(-1j * self.spacing[axis] * beta - 1j * np.pi)
@@ -326,7 +327,7 @@ class SimGrid(YeeGrid):
         return sim_fn
 
     def get_sim_sparams_fn(self, port_name: Optional[str] = None, transform_fn: Optional[Callable] = None,
-                           mode_idx: int = 0, profile_size_factor: int = 2,
+                           mode_idx: int = 0, profile_size_factor: int = 3,
                            measure_info: Optional[MeasureInfo] = None, tm_2d: bool = True) -> Callable:
         """Returns a function that measures the sparams and fields.
 

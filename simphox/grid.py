@@ -5,8 +5,8 @@ import jax.numpy as jnp
 import numpy as np
 import scipy.sparse as sp
 
-from .typing import Shape, Size, Size3, GridSpacing, Optional, List, Union, Dict, Op
-from .utils import curl_fn, yee_avg, fix_dataclass_init_docs
+from .typing import Size, Size3, Spacing, Optional, List, Union, Dict, Op, Tuple
+from .utils import curl_fn, yee_avg, fix_dataclass_init_docs, Box
 
 try:
     DPHOX_IMPORTED = True
@@ -51,7 +51,7 @@ class Port:
 
 
 class Grid:
-    def __init__(self, size: Size, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1.0):
+    def __init__(self, size: Size, spacing: Spacing, eps: Union[float, np.ndarray] = 1.0):
         """Grid object accomodating any electromagnetic simulation (FDFD, FDTD, BPM, etc.)
 
         Args:
@@ -78,9 +78,9 @@ class Grid:
             raise AttributeError(f'Require grid.shape == eps.shape but got '
                                  f'{self.shape} != {self.eps.shape}')
 
-        self.cell_sizes = [(self.spacing[i] * np.ones((self.shape[i],)) if self.ndim > 1 else self.spacing * np.ones(self.shape))
+        self.cells = [(self.spacing[i] * np.ones((self.shape[i],)) if self.ndim > 1 else self.spacing * np.ones(self.shape))
                            if i < self.ndim else np.ones((1,)) for i in range(3)]
-        self.pos = [np.hstack((0, np.cumsum(dx))) if dx.size > 1 else np.asarray((0,)) for dx in self.cell_sizes]
+        self.pos = [np.hstack((0, np.cumsum(dx))) if dx.size > 1 else np.asarray((0,)) for dx in self.cells]
         self.components = []
 
         # used to handle special functions of waveguide-based components
@@ -193,8 +193,8 @@ class Grid:
             The slices to access the array
 
         """
-        if self.ndim == 1:
-            raise ValueError(f"Simulation dimension ndim must be 2 or 3 but got {self.ndim}.")
+        # if self.ndim == 1:
+        #     raise ValueError(f"Simulation dimension ndim must be 2 or 3 but got {self.ndim}.")
         if not len(size) == 3:
             raise ValueError(f"For simulation that is 3d, must provide size arraylike of size 3 but got {size}")
         if not len(center) == 3:
@@ -218,7 +218,9 @@ class Grid:
         """Return a function that views a field at specific region.
 
         The view function is specified by center and size in the grid. This is typically used for
-        mode-based sources and measurements.
+        mode-based sources and measurements. Once a slice is found, the fields need to be reoriented
+        such that the field components point in the right direction despite a change in axis assignment.
+        This function will handle this logic automatically in 1d, 2d, and 3d cases.
 
         Args:
             center: Center of the region
@@ -252,15 +254,15 @@ class Grid:
 
         def view(field):
             oriented_field = xp.stack(
-                (xp.atleast_3d(field[axes[0]]),
-                 xp.atleast_3d(field[axes[1]]),
-                 xp.atleast_3d(field[axes[2]]))
+                (field[axes[0]].reshape(self.shape3),
+                 field[axes[1]].reshape(self.shape3),
+                 field[axes[2]].reshape(self.shape3))
             )  # orient the field by axis (useful for mode calculation)
             return oriented_field[:, s[0], s[1], s[2]].transpose(0, *(1 + axes))
 
         return view
 
-    def get_mask_fn(self, size: Size3, center: Optional[Size3] = None):
+    def mask_fn(self, size: Size3, center: Optional[Size3] = None):
         """Given a box with :code:`size` and :code:`center`, return a function that sets pixels in :code:`rho`,
         where :code:`rho.shape == grid.eps.shape`, outside the box to :code:`eps`.
         This is important in inverse design to avoid modifying the material region near the source and measurement
@@ -279,11 +281,54 @@ class Grid:
         mask = self.mask(center, size)
         return lambda rho: jnp.array(rho_init) * (1 - mask) + rho * mask
 
+    def block_design(self, waveguide: Box, wg_height: Optional[float] = None, sub_eps: float = 1,
+                     sub_height: float = 0, coupling_gap: float = 0, block: Optional[Box] = None, sep: Size = (0, 0),
+                     vertical: bool = False, rib_y: float = 0):
+        """A helper function for designing a useful port or cross section for a mode solver.
+
+        Args:
+            waveguide: The base waveguide material and size in the form of :code:`Box`.
+            wg_height: The waveguide height.
+            sub_eps: The substrate epsilon (defaults to air)
+            sub_height: The height of the substrate (or the min height of the waveguide built on top of it)
+            coupling_gap: The coupling gap specified means we get a pair of base blocks
+            separated by :code:`coupling_gap`.
+            block: Perturbing block.
+            sep: Separation of the block from the base waveguide layer.
+            vertical: Whether the perturbing block moves vertically, or laterally otherwise.
+            rib_y: Rib section
+
+        Returns:
+            The resulting :code:`Grid` with the modified :code:`eps` property.
+
+        """
+        # if self.ndim == 1:
+        #     raise NotImplementedError("Only implemented for 2d for now (most useful case).")
+        if rib_y > 0:
+            self.fill(rib_y + sub_height, waveguide.eps)
+        self.fill(sub_height, sub_eps)
+        waveguide.align(self.center)
+        if wg_height:
+            waveguide.valign(wg_height)
+        sep = (sep, sep) if not isinstance(sep, Tuple) else sep
+        d = coupling_gap / 2 + waveguide.size[0] / 2 if coupling_gap > 0 else 0
+        waveguides = [waveguide.copy.translate(-d), waveguide.copy.translate(d)]
+        blocks = []
+        if vertical:
+            blocks = [block.copy.align(waveguides[0]).valign(waveguides[0]).translate(dy=sep[0]),
+                      block.copy.align(waveguides[1]).valign(waveguides[1]).translate(dy=sep[1])]
+        elif block is not None:
+            blocks = [block.copy.valign(wg_height).halign(waveguides[0], left=False).translate(-sep[0]),
+                      block.copy.valign(wg_height).halign(waveguides[1]).translate(sep[1])]
+        for wg in waveguides + blocks:
+            self.set_eps((wg.center[0], wg.center[1], 0), (wg.size[0], wg.size[1], 0), wg.eps)
+        return self
+
 
 class YeeGrid(Grid):
-    def __init__(self, size: Size, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
-                 bloch_phase: Union[Size, float] = 0.0, pml: Optional[Union[int, Shape, Size]] = None,
-                 pml_params: Size3 = (4, -16, 1.0), yee_avg: int = 1, name: str = 'simgrid'):
+    def __init__(self, size: Size, spacing: Spacing, eps: Union[float, np.ndarray] = 1,
+                 bloch_phase: Union[Size, float] = 0.0, pml: Optional[Size] = None,
+                 pml_params: Size3 = (4, -16, 1.0), name: str = 'simgrid'):
         """The base :code:`YeeGrid` class (adding things to :code:`Grid` like Yee grid support, Bloch phase,
         PML shape, etc.).
 
@@ -294,15 +339,12 @@ class YeeGrid(Grid):
             bloch_phase: Bloch phase (generally useful for angled scattering sims)
             pml: Perfectly matched layer (PML) of thickness on both sides of the form :code:`(x_pml, y_pml, z_pml)`
             pml_params: The parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
-            yee_avg: whether to do a yee average (highly recommended)
         """
         super(YeeGrid, self).__init__(size, spacing, eps)
         self.pml_shape = np.asarray(pml, dtype=int) if isinstance(pml, tuple) else pml
         self.pml_shape = np.ones(self.ndim, dtype=int) * pml if isinstance(pml, int) else pml
         self.pml_params = pml_params
-        self.yee_avg = yee_avg
         self.name = name
-        self.field_shape = np.hstack((3, self.shape))
         if self.pml_shape is not None:
             if np.any(self.pml_shape <= 3) or np.any(self.pml_shape >= self.shape // 2):
                 raise AttributeError(f'PML shape must be more than 3 and less than half the shape on each axis.')
@@ -315,13 +357,13 @@ class YeeGrid(Grid):
             raise AttributeError(f'Need len(bloch_phase) == len(grid_shape),'
                                  f'got ({len(self.bloch)}, {len(self.shape)}).')
         self.dtype = np.float64 if pml is None and bloch_phase == 0 else np.complex128
-        self._dxes = np.meshgrid(*self.cell_sizes, indexing='ij'), np.meshgrid(*self.cell_sizes, indexing='ij')
+        self._dxes = np.meshgrid(*self.cells, indexing='ij'), np.meshgrid(*self.cells, indexing='ij')
 
     def deriv(self, back: bool = False) -> List[sp.spmatrix]:
-        """Calculate directional derivative
+        """Calculate directional derivative.
 
         Args:
-            back: Return backward derivative
+            back: Return backward derivative.
 
         Returns:
             Discrete directional derivative :code:`d` of the form :code:`(d_x, d_y, d_z)`
@@ -350,17 +392,38 @@ class YeeGrid(Grid):
         return d
 
     @property
-    def df(self):
+    def deriv_forward(self):
+        """The forward derivative
+
+        Returns:
+            The forward derivative
+
+        """
         return self.deriv()
 
     @property
-    def db(self):
+    def deriv_backward(self):
+        """The backward derivative
+
+        Returns:
+            The backward derivative
+
+        """
         return self.deriv(back=True)
 
-    def diff_fn(self, use_h: bool = False, use_jax: bool = False):
+    def diff_fn(self, of_h: bool = False, use_jax: bool = False):
+        """Return a function that takes the discrete derivative of a field in a functional manner based on grid.
+
+        Args:
+            of_h: Take the derivative of :math:`\\mathbf{H}`, otherwise :math:`\\mathbf{E}`.
+            use_jax: Whether to use jax.
+
+        Returns:
+            The discrete derivative function
+        """
         xp = jnp if use_jax else np
-        dx = jnp.array(self._dxes[use_h]) if use_jax else self._dxes[use_h]
-        if use_h:
+        dx = jnp.array(self._dxes[of_h]) if use_jax else self._dxes[of_h]
+        if of_h:
             def _diff(f, a):
                 return (f - xp.roll(f, 1, axis=a)) / dx[a]
         else:
@@ -368,45 +431,33 @@ class YeeGrid(Grid):
                 return (xp.roll(f, -1, axis=a) - f) / dx[a]
         return _diff
 
-    def curl_e(self, beta: Optional[float] = None, use_jax: bool = False) -> Op:
+    def curl_fn(self, beta: Optional[float] = None, of_h: bool = False, use_jax: bool = False) -> Op:
         """Get the function that computes curl of the electric field :math:`\\mathbf{E}`.
 
         Args:
             beta: Propagation constant in the z direction (note: x, y are the `cross section` axes).
+            of_h: Whether to take the curl of h
             use_jax: Whether the returned function should use jax.
 
         Returns:
             A function that computes discretized curl :math:`\\nabla \\times \\mathbf{E}`.
 
         """
-        return curl_fn(self.diff_fn(use_h=False, use_jax=use_jax), use_jax=use_jax, beta=beta)
+        diff_fn = self.diff_fn(of_h=of_h, use_jax=use_jax)
+        return curl_fn(diff_fn, use_jax=use_jax, beta=beta)
 
-    def curl_h(self, beta: Optional[float] = None, use_jax: bool = False) -> Op:
-        """Get the function that computes the curl of the magnetic field :math:`\\mathbf{H}`
-
-           Args:
-               beta: Propagation constant in the z direction (note: x, y are the `cross section` axes).
-               use_jax: Whether the returned function should use jax.
-
-           Returns:
-               A function that computes discretized curl :math:`\\nabla \times \\mathbf{H}`.
-
-        """
-        return curl_fn(self.diff_fn(use_h=True, use_jax=use_jax), use_jax=use_jax, beta=beta)
-
-    def pml_safe_placement(self, x: float, y: float, z: float) -> Size3:
+    def pml_safe_placement(self, loc: Size3) -> Size3:
         """Specifies a source/ measurement placement that is safe from the PML region / edge of the simulation.
 
         Args:
-            x: Input x location.
-            y: Input y location.
-            z: Input z location.
+            loc: Location of the form (x, y, z) to move safely away from the PML
 
         Returns:
             New x, y, z tuple that is safe from PML (at least one Yee grid point away from the pml region).
 
         """
-        pml = (self.pml_shape + 1) * self.spacing if self.pml_shape is not None else (0, 0)
+        x, y, z = loc
+        pml = (self.pml_shape + 3) * self.spacing if self.pml_shape is not None else (0, 0)
         maxx, maxy = self.size[:2]
         new_x = min(max(x, pml[0]), maxx - pml[0])
         new_y = min(max(y, pml[1]), maxy - pml[1])
@@ -415,4 +466,4 @@ class YeeGrid(Grid):
     @property
     @lru_cache()
     def eps_t(self):
-        return yee_avg(self.eps.reshape(self.shape3), shift=self.yee_avg)
+        return yee_avg(self.eps.reshape(self.shape3))

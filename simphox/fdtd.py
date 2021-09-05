@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from .grid import YeeGrid
-from .typing import Shape, GridSpacing, Optional, Union, Source, State, Size3, Size
+from .typing import Shape, Spacing, Optional, Union, Source, State, Size3, Size
 from .utils import pml_params, curl_fn, yee_avg
 
 
@@ -25,7 +25,7 @@ class FDTD(YeeGrid):
         name: Name of the simulator
     """
 
-    def __init__(self, size: Size, spacing: GridSpacing, eps: Union[float, np.ndarray] = 1,
+    def __init__(self, size: Size, spacing: Spacing, eps: Union[float, np.ndarray] = 1,
                  pml: Optional[Union[Shape, Size]] = None, pml_params: Size3 = (3, -35, 1),
                  use_jax: bool = True, name: str = 'fdtd'):
         super(FDTD, self).__init__(size, spacing, eps, pml=pml, pml_params=pml_params, name=name)
@@ -56,8 +56,8 @@ class FDTD(YeeGrid):
             self.use_jax = use_jax
             self._curl_h_pml = [self.curl_h_pml(pml_idx) for pml_idx in range(len(self.pml_regions))]
             self._curl_e_pml = [self.curl_e_pml(pml_idx) for pml_idx in range(len(self.pml_regions))]
-        self._curl_e = self.curl_e(use_jax=self.use_jax)
-        self._curl_h = self.curl_h(use_jax=self.use_jax)
+        self._curl_e = self.curl_fn(use_jax=self.use_jax)
+        self._curl_h = self.curl_fn(of_h=True, use_jax=self.use_jax)
 
         raise NotImplementedError("This class is still WIP")
 
@@ -194,7 +194,7 @@ class FDTD(YeeGrid):
 
     def _cpml(self, ax: int, alpha_max: float = 0, exp_scale: float = 3,
               kappa: float = 1, log_reflection: float = 35) -> Tuple[np.ndarray, np.ndarray]:
-        if self.cell_sizes[ax].size == 1:
+        if self.cells[ax].size == 1:
             return np.ones(2), np.ones(2)
         sigma, alpha = pml_params(self.pos[ax], t=self.pml_shape[ax], exp_scale=exp_scale,
                                   log_reflection=-log_reflection, absorption_corr=1)
@@ -218,5 +218,5 @@ class FDTD(YeeGrid):
     @property
     @lru_cache()
     def eps_t(self):
-        eps_t = yee_avg(self.eps, shift=self.yee_avg)
+        eps_t = yee_avg(self.eps)
         return self.xp.asarray(eps_t)
