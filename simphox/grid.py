@@ -327,7 +327,7 @@ class Grid:
 
 class YeeGrid(Grid):
     def __init__(self, size: Size, spacing: Spacing, eps: Union[float, np.ndarray] = 1,
-                 bloch_phase: Union[Size, float] = 0.0, pml: Optional[Size] = None,
+                 bloch_phase: Union[Size, float] = 0.0, pml: Optional[Size] = None, pml_sep: int = 5,
                  pml_params: Size3 = (4, -16, 1.0), name: str = 'simgrid'):
         """The base :code:`YeeGrid` class (adding things to :code:`Grid` like Yee grid support, Bloch phase,
         PML shape, etc.).
@@ -338,23 +338,25 @@ class YeeGrid(Grid):
             eps: Relative permittivity :math:`\\epsilon_r`
             bloch_phase: Bloch phase (generally useful for angled scattering sims)
             pml: Perfectly matched layer (PML) of thickness on both sides of the form :code:`(x_pml, y_pml, z_pml)`
+            pml_sep: Specifies the number of pixels that any source must be placed away from a PML region.
             pml_params: The parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
         """
         super(YeeGrid, self).__init__(size, spacing, eps)
-        self.pml_shape = np.asarray(pml, dtype=int) if isinstance(pml, tuple) else pml
-        self.pml_shape = np.ones(self.ndim, dtype=int) * pml if isinstance(pml, int) else pml
+        self.pml = pml
+        self.pml_sep = pml_sep
+        self.pml_shape = pml if pml is None else (np.asarray(pml, dtype=float) / self.spacing).astype(np.int)
         self.pml_params = pml_params
         self.name = name
         if self.pml_shape is not None:
             if np.any(self.pml_shape <= 3) or np.any(self.pml_shape >= self.shape // 2):
                 raise AttributeError(f'PML shape must be more than 3 and less than half the shape on each axis.')
         if pml is not None and not len(self.pml_shape) == len(self.shape):
-            raise AttributeError(f'Need len(pml_shape) == len(grid_shape),'
+            raise AttributeError(f'Need len(pml_shape) == grid.shape,'
                                  f'got ({len(pml)}, {len(self.shape)}).')
         self.bloch = np.ones_like(self.shape) * np.exp(1j * np.asarray(bloch_phase)) if isinstance(bloch_phase, float) \
             else np.exp(1j * np.asarray(bloch_phase))
         if not len(self.bloch) == len(self.shape):
-            raise AttributeError(f'Need len(bloch_phase) == len(grid_shape),'
+            raise AttributeError(f'Need bloch_phase.size == grid.shape,'
                                  f'got ({len(self.bloch)}, {len(self.shape)}).')
         self.dtype = np.float64 if pml is None and bloch_phase == 0 else np.complex128
         self._dxes = np.meshgrid(*self.cells, indexing='ij'), np.meshgrid(*self.cells, indexing='ij')
@@ -457,7 +459,7 @@ class YeeGrid(Grid):
 
         """
         x, y, z = loc
-        pml = (self.pml_shape + 3) * self.spacing if self.pml_shape is not None else (0, 0)
+        pml = (self.pml_shape + self.pml_sep) * self.spacing if self.pml_shape is not None else (0, 0)
         maxx, maxy = self.size[:2]
         new_x = min(max(x, pml[0]), maxx - pml[0])
         new_y = min(max(y, pml[1]), maxy - pml[1])
@@ -466,4 +468,10 @@ class YeeGrid(Grid):
     @property
     @lru_cache()
     def eps_t(self):
+        """This attribute specifies the grid-averaged epsilon in the grid.
+
+        Returns:
+            The grid-averaged epsilon.
+
+        """
         return yee_avg(self.eps.reshape(self.shape3))

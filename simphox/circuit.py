@@ -95,14 +95,6 @@ class Component:
         return cls(pattern, model=model, name=name)
 
 
-def t_to_s_matrix(t: jnp.ndarray):
-    o = jnp.zeros_like(t)
-    return jnp.block(
-        [o, t],
-        [t.T, o]
-    )
-
-
 def dc(epsilon):
     return jnp.array([
         [jnp.cos(np.pi / 4 + epsilon), 1j * jnp.sin(np.pi / 4 + epsilon)],
@@ -169,7 +161,7 @@ def analyze(v, tree):
     return thetas, phis, v[0]
 
 
-def reck(u):
+def triangular(u):
     thetas, phis, mzi_lists = [], [], []
     n = u.shape[0]
     for i in range(n - 1):

@@ -15,10 +15,13 @@ SMALL_NUMBER = 1e-20
 def fix_dataclass_init_docs(cls):
     """Fix the ``__init__`` documentation for a :class:`dataclasses.dataclass`.
 
-    :param cls: The class whose docstring needs fixing
-    :returns: The class that was passed so this function can be used as a decorator
-
     .. seealso:: https://github.com/agronholm/sphinx-autodoc-typehints/issues/123
+
+    Attributes:
+        cls: The class whose docstring needs fixing
+
+    Returns:
+        The class that was passed so this function can be used as a decorator
     """
     cls.__init__.__qualname__ = f'{cls.__name__}.__init__'
     return cls
@@ -145,11 +148,6 @@ def poynting_fn(axis: int = 2, use_jax: bool = False):
                             (h[ax[1]] + xp.roll(h[ax[1]], shift=1, axis=1)) / 2])
         return e_cross[ax[0]] * h_cross.conj()[ax[1]] - e_cross[ax[1]] * h_cross.conj()[ax[0]]
     return poynting
-
-
-def overlap(e1: np.ndarray, h1: np.ndarray, e2: np.ndarray, h2: np.ndarray):
-    return (np.sum(poynting_fn(2)(e1, h2)) * np.sum(poynting_fn(2)(e2, h1)) /
-            np.sum(poynting_fn(2)(e1, h1))).real / np.sum(poynting_fn(2)(e2, h2)).real
 
 
 def d2curl_op(d: List[sp.spmatrix]) -> sp.spmatrix:

@@ -70,12 +70,13 @@ class FDFD(SimGrid):
         eps: Relative permittivity :math:`\\epsilon_r`
         bloch_phase: Bloch phase (generally useful for angled scattering sims, not yet implemented!)
         pml: Perfectly matched layer (PML) of thickness on both sides of the form :code:`(x_pml, y_pml, z_pml)`
+        pml_sep: The PML separation distance in number of pixels for sources
         pml_params: The PML parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
     """
     def __init__(self, size: Size, spacing: Spacing,
                  wavelength: float = 1.55, eps: Union[float, np.ndarray] = 1,
-                 bloch_phase: Union[Size, float] = 0.0, pml: Optional[Union[int, Shape, Size]] = None,
-                 pml_params: Size3 = (4, -16, 1.0), name: str = 'fdfd'):
+                 bloch_phase: Union[Size, float] = 0.0, pml: Optional[Union[Size, float]] = None,
+                 pml_sep: int = 5, pml_params: Size3 = (4, -16, 1.0), name: str = 'fdfd'):
 
         super(FDFD, self).__init__(
             size=size,
@@ -84,6 +85,7 @@ class FDFD(SimGrid):
             bloch_phase=bloch_phase,
             pml=pml,
             pml_params=pml_params,
+            pml_sep=pml_sep,
             name=name
         )
 
@@ -140,7 +142,7 @@ class FDFD(SimGrid):
 
     @property
     def mat_ez(self) -> sp.csr_matrix:
-        """Build the discrete Maxwell operator :math:`A_z(k_0)` acting on :math:`\\mathbf{e}_z` (for 2D problems).
+        """Build the discrete Maxwell operator :math:`A_z(k_0)` acting on :math:`\\mathbf{e}_z` (for 1D/2D problems).
 
         Returns:
             Electric field operator :math:`A_z` for a source with ez-polarized field.
@@ -290,18 +292,17 @@ class FDFD(SimGrid):
         b = component.size
         x = b[0] + 2 * boundary[0]
         y = b[1] + 2 * boundary[1]
-        npml = int(pml / spacing)
         component_zmin = sub_z if component_zmin is None else component_zmin
         spacing = spacing * np.ones(2 + (component_t > 0)) if isinstance(spacing, float) else np.asarray(spacing)
         size = (x, y, height) if height > 0 else (x, y)
-        grid = cls(size, spacing, wavelength=wavelength, eps=bg_eps, pml=npml, name=name)
+        grid = cls(size, spacing, wavelength=wavelength, eps=bg_eps, pml=pml, name=name)
         grid.fill(sub_z + rib_t, core_eps)
         grid.fill(sub_z, clad_eps)
         grid.add(component, core_eps, component_zmin, component_t)
         return grid
 
     def sparams(self, port_name: str, mode_idx: int = 0, measure_info: Optional[Dict[str, List[int]]] = None):
-        """Measure sparams using port profiles.
+        """Measure sparams using a port profile provided for a given port and mode index.
 
         Args:
             port_name: The port name for the sparams to measure.
@@ -309,7 +310,7 @@ class FDFD(SimGrid):
             measure_info: A list of :code:`port_name`, :code:`mode_idx` to get mode measurements at each port.
 
         Returns:
-            Sparams measured at and with respect to the ports specified in the class.
+            Sparams measured at the ports specified in the class.
 
         """
         measure_fn = self.get_measure_fn(measure_info)
@@ -410,7 +411,8 @@ class FDFD(SimGrid):
 
         return solve
 
-    def to_2d(self, wavelength: float = None, slab_x: Union[Shape2, Size2] = None, slab_y: Union[Shape2, Size2] = None):
+    def to_2d(self, wavelength: float = None, slab_x: Union[Shape2, Size2] = None,
+              slab_y: Union[Shape2, Size2] = None, tm: bool = False):
         """Project a 3D FDFD into a 2D FDFD using the variational 2.5D method laid out in the
         [paper](https://ris.utwente.nl/ws/files/5413011/ishpiers09.pdf).
 
@@ -419,13 +421,14 @@ class FDFD(SimGrid):
                 (useful to stabilize multi-wavelength optimizations)
             slab_x: Port location x (if None, the port is provided by reading the port location specified by the component)
             slab_y: Port location y (if None, the port is provided by reading the port location specified by the component)
+            tm: Whether the mode in the 2D simulation is a TM mode (dominated by Hz component).
 
         Returns:
             A 2D FDFD to approximate the 3D FDFD
 
         """
         wavelength = self.wavelength if wavelength is None else wavelength
-        return FDFD.from_simgrid(super(FDFD, self).to_2d(wavelength), wavelength)
+        return FDFD.from_simgrid(super(FDFD, self).to_2d(wavelength, tm=tm), wavelength)
 
     def tfsf_profile(self, q_mask: np.ndarray, wavelength: float, k: Size):
         mask = q_mask

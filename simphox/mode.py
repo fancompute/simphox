@@ -1,5 +1,3 @@
-from functools import lru_cache
-
 import jax.numpy as jnp
 import numpy as np
 import scipy.sparse as sp
@@ -7,7 +5,7 @@ from scipy.sparse.linalg import eigs
 
 from .grid import YeeGrid
 from .typing import Size, Spacing, Optional, Tuple, Union, Callable, Size2
-from .utils import poynting_fn, overlap, Box
+from .utils import poynting_fn, Box
 from .viz import plot_power_2d, plot_field_2d
 
 try:  # pardiso (using Intel MKL) is much faster than scipy's solver
@@ -17,14 +15,9 @@ except OSError:  # if mkl isn't installed
 
 try:
     from dphox.component import Pattern
-
     DPHOX_INSTALLED = True
 except ImportError:
     DPHOX_INSTALLED = False
-
-from logging import getLogger
-
-logger = getLogger()
 
 
 class ModeSolver(YeeGrid):
@@ -90,7 +83,7 @@ class ModeSolver(YeeGrid):
         self.k0 = 2 * np.pi / self.wavelength
 
     @property
-    def wgm(self) -> sp.spmatrix:
+    def waveguide_mode_matrix(self) -> sp.spmatrix:
         """Build the WaveGuide Mode (WGM) operator (for 1D or 2D grid only)
 
         The WGM operator :math:`C(\\omega)` acts on the magnetic field
@@ -119,7 +112,7 @@ class ModeSolver(YeeGrid):
         else:
             return sp.diags(self.eps.flatten()) * self.k0 ** 2 + df[0].dot(db[0])
 
-    C = wgm  # C is the matrix for the guided mode eigensolver
+    C = waveguide_mode_matrix  # C is the matrix for the guided mode eigensolver
 
     def e2h(self, e: np.ndarray, beta: Optional[float] = None) -> np.ndarray:
         """Convert magnetic field :math:`\\mathbf{e}` to electric field :math:`\\mathbf{h}`.
@@ -151,7 +144,7 @@ class ModeSolver(YeeGrid):
         """
         return self.curl_fn(of_h=True, beta=beta)(self.reshape(h)) / (1j * self.k0 * self.eps_t)
 
-    def solve(self, num_modes: int = 6, beta_guess: Optional[Union[float, Size2]] = None,
+    def solve(self, max_num_modes: int = 6, beta_guess: Optional[Union[float, Size2]] = None,
               tol: float = 1e-7) -> Tuple[np.ndarray, np.ndarray]:
         """FDFD waveguide mode solver
 
@@ -164,8 +157,9 @@ class ModeSolver(YeeGrid):
         (:math:`\\beta_m = \\sqrt{\\lambda_m}`).
 
         Args:
-            num_modes: Number of modes to return.
-            beta_guess: Guess for propagation constant :math:`\beta` (the eigenvalue).
+            max_num_modes: Maximum number of modes to return (less are returned if they correspond
+                to an imaginary :math:`\\beta`).
+            beta_guess: Guess for propagation constant :math:`\\beta` (the eigenvalue).
             tol: Tolerance of the mode eigensolver.
 
         Returns:
@@ -176,48 +170,29 @@ class ModeSolver(YeeGrid):
         df = self.deriv_forward
         if isinstance(beta_guess, float) or beta_guess is None:
             sigma = beta_guess ** 2 if beta_guess else (self.k0 * np.sqrt(np.max(self.eps))) ** 2
-            eigvals, eigvecs = eigs(self.wgm, k=num_modes, sigma=sigma, tol=tol)
+            eigvals, eigvecs = eigs(self.waveguide_mode_matrix, k=max_num_modes, sigma=sigma, tol=tol)
         elif isinstance(beta_guess, tuple):
             erange = beta_guess[0] ** 2, beta_guess[1] ** 2
-            eigvals, eigvecs, _, _, _, _ = feast_eigs(self.wgm, erange=erange, k=num_modes)
+            eigvals, eigvecs, _, _, _, _ = feast_eigs(self.waveguide_mode_matrix, erange=erange, k=max_num_modes)
         else:
             raise TypeError(f'Expected beta_guess to be None, float, or Tuple[float, float] but got {type(beta_guess)}')
+
+        useful_modes = np.where(eigvals.real > 0)[0]
+        eigvals = eigvals[useful_modes]
+        eigvecs = eigvecs[:, useful_modes]
+
         inds_sorted = np.asarray(np.argsort(np.sqrt(eigvals.real))[::-1])
+        eigvals = eigvals[inds_sorted]
+        eigvecs = eigvecs[:, inds_sorted]
+
         if self.ndim > 1:
             hz = sp.hstack(df[:2]) @ eigvecs / (1j * np.sqrt(eigvals))
             h = np.vstack((eigvecs, hz))
         else:
             h = eigvecs
 
-        h = h[:, inds_sorted].T
-        return np.sqrt(eigvals[inds_sorted]), h * np.exp(-1j * np.angle(h[:, :1]))  # ensure phase doesn't between runs
-
-    def profile(self, mode_idx: int = 0, power: float = 1,
-                beta_guess: Optional[float] = None, tol: float = 1e-5,
-                return_beta: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
-        """Define waveguide mode source using waveguide mode solver (incl. pml if part of the mode solver!)
-
-        Args:
-            mode_idx: Mode index to use (default is 0, the fundamental mode)
-            power: Power to scale the source (default is 1, a normalized mode in arb units),
-            and if negative, the source moves in opposite direction (polarity is encoded in sign of power).
-            beta_guess: Guess for propagation constant :math:`\beta`
-            tol: Tolerance of the mode solver
-            return_beta: Also return beta
-
-        Returns:
-            Grid-shaped waveguide mode (wgm) source (normalized h-mode for 1d, spins-b source for 2d)
-        """
-
-        polarity = np.sign(power)
-        p = np.abs(power)
-
-        beta, h = self.solve(min(mode_idx + 1, 6), beta_guess, tol)
-        if self.ndim == 1:
-            src = h[mode_idx] * polarity * np.sqrt(p)
-        else:
-            src = self.reshape(h[mode_idx]) * polarity * np.sqrt(p)
-        return beta, src if return_beta else src
+        h = h.T
+        return np.sqrt(eigvals[useful_modes].real), h * np.exp(-1j * np.angle(h[:, :1]))  # ensure phase doesn't between runs
 
     def dispersion_sweep(self, wavelengths: np.ndarray, m: int = 6, pbar: Callable = None):
         """Dispersion sweep for cross sectional modes
@@ -242,13 +217,13 @@ class ModeLibrary:
     """A data structure to contain the information about :math:`num_modes` cross-sectional modes
 
     Args:
-        num_modes: Number of modes that should be solved.
+        max_num_modes: Maximum number of modes that should be solved.
     """
 
-    def __init__(self, solver: ModeSolver, num_modes: int = 6):
+    def __init__(self, solver: ModeSolver, max_num_modes: int = 6):
         self.solver = solver
         self.ndim = self.solver.ndim
-        self.betas, self.modes = self.solver.solve(num_modes)
+        self.betas, self.modes = self.solver.solve(max_num_modes)
         self.modes = self.modes
         self.eps = solver.eps
         self.num_modes = self.m = len(self.betas)
@@ -286,7 +261,11 @@ class ModeLibrary:
             block, sep, vertical, rib_y)
         return cls(solver, num_modes)
 
-    @lru_cache()
+    def _check_num_modes(self, mode_idx: int):
+        if mode_idx > self.m - 1:
+            raise ValueError("Out of range of number of solutions")
+        return mode_idx
+
     def h(self, mode_idx: int = 0, tm_2d: bool = True) -> np.ndarray:
         """Magnetic field :math:`\\mathbf{H}` for the mode of specified index
 
@@ -298,7 +277,7 @@ class ModeLibrary:
             :math:`\\mathbf{H}_m`, an :code:`ndarray` of the form :code:`(3, X, Y)` for mode :math:`m \\leq M`
 
         """
-        mode = self.modes[mode_idx]
+        mode = self.modes[self._check_num_modes(mode_idx)]
         if self.ndim == 1:
             if tm_2d:
                 mode = np.hstack((self.o, mode, self.o))
@@ -308,7 +287,6 @@ class ModeLibrary:
                                1j * self.solver.k0)
         return self.solver.reshape(mode)
 
-    @lru_cache()
     def e(self, mode_idx: int = 0, tm_2d: bool = True) -> np.ndarray:
         """Electric field :math:`\\mathbf{E}` for the mode of specified index
 
@@ -320,6 +298,7 @@ class ModeLibrary:
             :math:`\\mathbf{E}_m`, an :code:`ndarray` of shape :code:`(3, X, Y, Z)` for mode :math:`m \\leq M`
 
         """
+        self._check_num_modes(mode_idx)
         if self.ndim == 2:
             return self.solver.h2e(self.h(mode_idx), self.betas[mode_idx])
         else:
@@ -332,7 +311,6 @@ class ModeLibrary:
                 mode = np.hstack((self.o, mode, self.o))
             return self.solver.reshape(mode)
 
-    @lru_cache()
     def sz(self, mode_idx: int = 0) -> np.ndarray:
         """Poynting vector :math:`\\mathbf{S}_z` for the mode of specified index
 
@@ -344,6 +322,7 @@ class ModeLibrary:
             of shape :code:`(X, Y)`
 
         """
+        self._check_num_modes(mode_idx)
         return poynting_fn(2)(self.e(mode_idx), self.h(mode_idx)).squeeze()
 
     def beta(self, mode_idx: int = 0) -> float:
@@ -355,7 +334,7 @@ class ModeLibrary:
         Returns:
             :math:`\\beta_m` for mode :math:`m \\leq M`
         """
-        return self.betas[mode_idx]
+        return self.betas[self._check_num_modes(mode_idx)]
 
     def n(self, mode_idx: int = 0):
         """Effective index :math:`n` for mode indexed by :code:`mode_idx`.
@@ -363,10 +342,9 @@ class ModeLibrary:
         Returns:
             The effective index :math:`n`
         """
-        return self.betas[mode_idx] / self.solver.k0
+        return self.betas[self._check_num_modes(mode_idx)] / self.solver.k0
 
     @property
-    @lru_cache()
     def ns(self):
         """The refractive index for all modes corresponding to :code:`betas`.
 
@@ -383,7 +361,6 @@ class ModeLibrary:
     def dn(self):
         return (self.beta(0) - self.beta(1)) / self.solver.k0
 
-    @lru_cache()
     def te_ratio(self, mode_idx: int = 0):
         if self.ndim != 2:
             raise AttributeError("ndim must be 2, otherwise te_ratio is 1 or 0.")
@@ -404,8 +381,6 @@ class ModeLibrary:
             include_n: Include the refractive index in the title.
             title_size: Fontsize of the title.
             label_size: Fontsize of the label.
-
-        Returns:
 
         """
         if mode_idx > self.m - 1:
@@ -434,8 +409,6 @@ class ModeLibrary:
             title_size: Fontsize of the title.
             label_size: Fontsize of the label.
 
-        Returns:
-
         """
         field = self.h(mode_idx=idx) if use_h else self.e(mode_idx=idx)
         if idx > self.m - 1:
@@ -455,11 +428,18 @@ class ModeLibrary:
         polarization = "TE" if np.argmax((self.te_ratio(idx), 1 - self.te_ratio(idx))) > 0 else "TM"
         ax.text(x=0.05, y=0.9, s=rf'{polarization}[{ratio:.2f}]', color='black', transform=ax.transAxes)
 
-    def phase(self, length: float = 1):
-        return self.solver.k0 * length * self.n()
+    def phase(self, length: float = 1, mode_idx: int = 0):
+        """Measure the phase delay propagated over a length
 
-    def overlap_fundamental(self, other_sol: "ModeLibrary"):
-        return overlap(self.e(), self.h(), other_sol.e(), other_sol.h()) ** 2
+        Args:
+            length: The length over which to propagate the mode
+            mode_idx: The mode idx to propagate
+
+        Returns:
+            The aggregate phase delay over a length.
+
+        """
+        return self.solver.k0 * length * self.n(mode_idx)
 
     def place(self, mode_idx: int, grid: YeeGrid, center: Size, size: Size) -> np.ndarray:
         """Place at mode_idx in device with :math:`shape` and :math:`region`.
@@ -477,8 +457,21 @@ class ModeLibrary:
         """
         region = grid.slice(center, size)
         if self.ndim == 2:
+            # Find the place axis (the poynting direction, where the size should be 0)
+            place_axis = np.where(np.array(size) == 0)[0][0]
+
+            # Find the reorientation of field axes based on place_axis
+            # 0: (0, 1, 2) -> (2, 0, 1)
+            # 1: (0, 1, 2) -> (0, 2, 1)
+            # 2: (0, 1, 2) -> (0, 1, 2)
+            axes = [
+                np.asarray((2, 0, 1), dtype=int),
+                np.asarray((0, 2, 1), dtype=int),
+                np.asarray((0, 1, 2), dtype=int)
+            ][place_axis]
             x = np.zeros((3, *grid.shape), dtype=np.complex128)
             x[:, region[0], region[1], region[2]] = self.h(mode_idx)
+            x = x[axes]
         else:
             x = np.zeros(grid.shape, dtype=np.complex128)
             x[region[0], region[1]] = self.modes[mode_idx]
