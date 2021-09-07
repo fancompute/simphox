@@ -3,3 +3,4 @@ scipy
 matplotlib
 jax
 scikit-image
+bokeh

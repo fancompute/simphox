@@ -6,7 +6,7 @@ from scipy.sparse.linalg import eigs
 from .grid import YeeGrid
 from .typing import Size, Spacing, Optional, Tuple, Union, Callable, Size2
 from .utils import poynting_fn, Box
-from .viz import plot_power_2d, plot_field_2d
+from .viz import plot_power_2d, plot_field_2d, plot_field_1d, hv_field_1d, hv_field_2d, hv_power_1d, hv_power_2d
 
 try:  # pardiso (using Intel MKL) is much faster than scipy's solver
     from .mkl import feast_eigs
@@ -18,6 +18,12 @@ try:
     DPHOX_INSTALLED = True
 except ImportError:
     DPHOX_INSTALLED = False
+
+try:
+    import holoviews as hv
+    HOLOVIEWS_INSTALLED = True
+except ImportError:
+    HOLOVIEWS_INSTALLED = False
 
 
 class ModeSolver(YeeGrid):
@@ -80,7 +86,10 @@ class ModeSolver(YeeGrid):
         )
 
         self.wavelength = wavelength
-        self.k0 = 2 * np.pi / self.wavelength
+
+    @property
+    def k0(self):
+        return 2 * np.pi / self.wavelength
 
     @property
     def waveguide_mode_matrix(self) -> sp.spmatrix:
@@ -222,12 +231,33 @@ class ModeLibrary:
 
     def __init__(self, solver: ModeSolver, max_num_modes: int = 6):
         self.solver = solver
+        self.max_num_modes = max_num_modes
+        self._update_solve(self.solver.wavelength)
+
+    def _update_solve(self, wavelength: float):
         self.ndim = self.solver.ndim
-        self.betas, self.modes = self.solver.solve(max_num_modes)
+        self.solver.wavelength = wavelength
+        self.betas, self.modes = self.solver.solve(self.max_num_modes)
         self.modes = self.modes
-        self.eps = solver.eps
+        self.eps = self.solver.eps
         self.num_modes = self.m = len(self.betas)
         self.o = np.zeros_like(self.modes[0])
+
+    def update_wavelength(self, wavelength: float):
+        """Update the wavelength for the mode solver.
+
+        This method updates the wavelength for the mode solver and proceeds to solve at that new wavelength.
+        This is useful for dispersion simulations.
+
+        Args:
+            wavelength: The new wavelength for the mode solver
+
+        Returns:
+            The current ModeLibrary object with the modified wavelength.
+
+        """
+        self._update_solve(wavelength)
+        return self
 
     @classmethod
     def from_block_design(cls, size: Size, spacing: Spacing, waveguide: Box, num_modes: int = 6,
@@ -370,33 +400,47 @@ class ModeLibrary:
         te_ratios.append(norms[0] ** 2 / np.sum(norms ** 2))
         return np.asarray(te_ratios)
 
-    def plot_sz(self, ax, mode_idx: int = 0, title: str = "Poynting", include_n: bool = False,
-                title_size: float = 16, label_size=16):
+    def plot_power(self, ax, idx: int = 0, title: str = "Power", include_n: bool = True,
+                   title_size: float = 16, label_size=16):
         """Plot sz overlaid on the material
 
         Args:
             ax: Matplotlib axis handle.
-            mode_idx: Mode index to plot.
+            idx: Mode index to plot.
             title: Title of the plot/subplot.
             include_n: Include the refractive index in the title.
             title_size: Fontsize of the title.
             label_size: Fontsize of the label.
 
         """
-        if mode_idx > self.m - 1:
+        if idx > self.m - 1:
             raise ValueError("Out of range of number of solutions")
-        plot_power_2d(ax, np.abs(self.sz(mode_idx).real), self.eps, spacing=self.solver.spacing[0])
         if include_n:
-            ax.set_title(rf'{title}, $n_{mode_idx + 1} = {self.n(mode_idx):.4f}$', fontsize=title_size)
+            ax.set_title(rf'{title}, $n_{idx + 1} = {self.n(idx):.4f}$', fontsize=title_size)
         else:
             ax.set_title(rf'{title}', fontsize=title_size)
-        ax.text(x=0.9, y=0.9, s=rf'$s_z$', color='white', transform=ax.transAxes, fontsize=label_size)
-        ratio = np.max((self.te_ratio(mode_idx), 1 - self.te_ratio(mode_idx)))
-        polarization = "TE" if np.argmax((self.te_ratio(mode_idx), 1 - self.te_ratio(mode_idx))) > 0 else "TM"
-        ax.text(x=0.05, y=0.9, s=rf'{polarization}[{ratio:.2f}]', color='white', transform=ax.transAxes)
+        if self.ndim == 2:
+            plot_power_2d(ax, np.abs(self.sz(idx).real), self.eps, spacing=self.solver.spacing[0])
+            ax.text(x=0.9, y=0.9, s=rf'$s_z$', color='white', transform=ax.transAxes, fontsize=label_size)
+            ratio = np.max((self.te_ratio(idx), 1 - self.te_ratio(idx)))
+            polarization = "TE" if np.argmax((self.te_ratio(idx), 1 - self.te_ratio(idx))) > 0 else "TM"
+            ax.text(x=0.05, y=0.9, s=rf'{polarization}[{ratio:.2f}]', color='white', transform=ax.transAxes)
+        else:
+            plot_field_1d(ax, np.abs(self.sz(idx).real), rf'Power',
+                          self.eps, spacing=self.solver.spacing[0])
+
+    def _get_field_component(self, idx: int = 0, axis: Union[int, str] = 1, use_h: bool = True):
+        field = self.h(mode_idx=idx) if use_h else self.e(mode_idx=idx)
+        if idx > self.m - 1:
+            raise ValueError("Out of range of number of solutions")
+        if not (axis in (0, 1, 2, 'x', 'y', 'z')):
+            raise ValueError(f"Axis expected to be (0, 1, 2) or ('x', 'y', 'z') but got {axis}.")
+        a = ['x', 'y', 'z'][axis] if isinstance(axis, int) else axis
+        axis = {'x': 0, 'y': 1, 'z': 2}[axis] if isinstance(axis, str) else axis
+        return field[axis].squeeze(), rf'$h_{a}$' if use_h else rf'$e_{a}$'
 
     def plot_field(self, ax, idx: int = 0, axis: Union[int, str] = 1, use_h: bool = True, title: str = "Field",
-                   include_n: bool = False, title_size: float = 16, label_size=16):
+                   include_n: bool = True, title_size: float = 16, label_size=16):
         """Plot field overlaid on the material.
 
         Args:
@@ -410,23 +454,20 @@ class ModeLibrary:
             label_size: Fontsize of the label.
 
         """
-        field = self.h(mode_idx=idx) if use_h else self.e(mode_idx=idx)
-        if idx > self.m - 1:
-            raise ValueError("Out of range of number of solutions")
-        if not (axis in (0, 1, 2, 'x', 'y', 'z')):
-            raise ValueError(f"Axis expected to be (0, 1, 2) or ('x', 'y', 'z') but got {axis}.")
-        a = ['x', 'y', 'z'][axis] if isinstance(axis, int) else axis
-        axis = {'x': 0, 'y': 1, 'z': 2}[axis] if isinstance(axis, str) else axis
-        plot_field_2d(ax, field[axis].real.squeeze(), self.eps, spacing=self.solver.spacing[0])
         if include_n:
             ax.set_title(rf'{title}, $n_{idx + 1} = {self.n(idx):.4f}$', fontsize=title_size)
         else:
             ax.set_title(rf'{title}', fontsize=title_size)
-        ax.text(x=0.9, y=0.9, s=rf'$h_{a}$' if use_h else rf'$e_{a}$', color='black', transform=ax.transAxes,
-                fontsize=label_size)
-        ratio = np.max((self.te_ratio(idx), 1 - self.te_ratio(idx)))
-        polarization = "TE" if np.argmax((self.te_ratio(idx), 1 - self.te_ratio(idx))) > 0 else "TM"
-        ax.text(x=0.05, y=0.9, s=rf'{polarization}[{ratio:.2f}]', color='black', transform=ax.transAxes)
+        field, label = self._get_field_component(idx, axis, use_h)
+        if self.ndim == 2:
+            plot_field_2d(ax, field.real.squeeze(), self.eps, spacing=self.solver.spacing[0])
+            ax.text(x=0.9, y=0.9, s=label, color='black', transform=ax.transAxes,
+                    fontsize=label_size)
+            ratio = np.max((self.te_ratio(idx), 1 - self.te_ratio(idx)))
+            polarization = "TE" if np.argmax((self.te_ratio(idx), 1 - self.te_ratio(idx))) > 0 else "TM"
+            ax.text(x=0.05, y=0.9, s=rf'{polarization}[{ratio:.2f}]', color='black', transform=ax.transAxes)
+        else:
+            plot_field_1d(ax, field[axis].real.squeeze(), rf'Field({label})', self.eps, spacing=self.solver.spacing[0])
 
     def phase(self, length: float = 1, mode_idx: int = 0):
         """Measure the phase delay propagated over a length
@@ -499,3 +540,38 @@ class ModeLibrary:
             return xp.array([a + b, a - b])
 
         return _measure
+
+    def evolve(self, length: float, mode_weights: Tuple[float, ...] = (1,), use_h: bool = True):
+        if use_h:
+            f = sum([self.h(idx)[..., np.newaxis] * np.exp(1j * self.beta(idx) * length)[np.newaxis] * weight
+                     for idx, weight in enumerate(mode_weights)])
+        else:
+            f = sum([self.e(idx)[..., np.newaxis] * np.exp(1j * self.beta(idx) * length)[np.newaxis] * weight
+                     for idx, weight in enumerate(mode_weights)])
+        return f
+
+    def beat_length(self, idx0: int = 0, idx1: int = 1):
+        return np.pi / (self.beta(idx0) - self.beta(idx1))
+
+    def evolve_viz(self, max_length: float, mode_weights: Tuple[float, ...] = (1,), power: bool = True):
+        if not HOLOVIEWS_INSTALLED:
+            raise ImportError("Holoviews not installed.")
+
+        def _evolve(length: float):
+            h = self.evolve(length, mode_weights)
+            if power:
+                e = self.evolve(length, mode_weights, use_h=False)
+                s = poynting_fn(2)(e, h).squeeze()
+                if self.ndim == 1:
+                    return hv_power_1d(s, self.eps, self.solver.spacing)
+                else:
+                    return hv_power_2d(s, self.eps, self.solver.spacing[0])
+            else:
+                if self.ndim == 1:
+                    return hv_field_1d(h[1], self.eps, self.solver.spacing)
+                else:
+                    return hv_field_2d(h[1], self.eps, self.solver.spacing[0])
+
+        return hv.DynamicMap(_evolve, kdims=['length']).redim.values(
+            length=np.linspace(0, max_length, int(max_length / self.solver.spacing[0]) + 1)
+        )

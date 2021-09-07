@@ -7,7 +7,7 @@ from typing import Tuple, Union, Optional
 from copy import deepcopy
 import xarray as xr
 
-from .typing import List, Callable, Size2, Size, Size3
+from .typing import List, Callable, Size2, Size3
 
 SMALL_NUMBER = 1e-20
 
@@ -15,7 +15,8 @@ SMALL_NUMBER = 1e-20
 def fix_dataclass_init_docs(cls):
     """Fix the ``__init__`` documentation for a :class:`dataclasses.dataclass`.
 
-    .. seealso:: https://github.com/agronholm/sphinx-autodoc-typehints/issues/123
+    See Also:
+        https://github.com/agronholm/sphinx-autodoc-typehints/issues/123
 
     Attributes:
         cls: The class whose docstring needs fixing
@@ -72,12 +73,13 @@ class Box:
         material: :code:`Material` for this Box
         min: min x and min y of box
     """
-    size: Size2
+    size: Union[float, Size2]
     spacing: float = 1
     material: Optional[Material] = None
     min: Size2 = (0., 0.)
 
     def __post_init__(self):
+        self.size = (self.size, 0) if isinstance(self.size, float) else self.size
         self.eps = self.material.eps if self.material is not None else None
 
     @property

@@ -282,7 +282,7 @@ class Grid:
         return lambda rho: jnp.array(rho_init) * (1 - mask) + rho * mask
 
     def block_design(self, waveguide: Box, wg_height: Optional[float] = None, sub_eps: float = 1,
-                     sub_height: float = 0, coupling_gap: float = 0, block: Optional[Box] = None, sep: Size = (0, 0),
+                     sub_height: float = 0, gap: float = 0, block: Optional[Box] = None, sep: Size = (0, 0),
                      vertical: bool = False, rib_y: float = 0):
         """A helper function for designing a useful port or cross section for a mode solver.
 
@@ -291,27 +291,27 @@ class Grid:
             wg_height: The waveguide height.
             sub_eps: The substrate epsilon (defaults to air)
             sub_height: The height of the substrate (or the min height of the waveguide built on top of it)
-            coupling_gap: The coupling gap specified means we get a pair of base blocks
+            gap: The coupling gap specified means we get a pair of base blocks
             separated by :code:`coupling_gap`.
-            block: Perturbing block.
+            block: Perturbing block that is to be aligned either vertically or horizontally with waveguide (MEMS).
             sep: Separation of the block from the base waveguide layer.
             vertical: Whether the perturbing block moves vertically, or laterally otherwise.
-            rib_y: Rib section
+            rib_y: Rib section.
 
         Returns:
             The resulting :code:`Grid` with the modified :code:`eps` property.
 
         """
-        # if self.ndim == 1:
-        #     raise NotImplementedError("Only implemented for 2d for now (most useful case).")
         if rib_y > 0:
             self.fill(rib_y + sub_height, waveguide.eps)
         self.fill(sub_height, sub_eps)
         waveguide.align(self.center)
         if wg_height:
             waveguide.valign(wg_height)
+        else:
+            wg_height = waveguide.min[1]
         sep = (sep, sep) if not isinstance(sep, Tuple) else sep
-        d = coupling_gap / 2 + waveguide.size[0] / 2 if coupling_gap > 0 else 0
+        d = gap / 2 + waveguide.size[0] / 2 if gap > 0 else 0
         waveguides = [waveguide.copy.translate(-d), waveguide.copy.translate(d)]
         blocks = []
         if vertical:

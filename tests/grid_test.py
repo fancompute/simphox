@@ -275,7 +275,7 @@ def test_block_design_eps_matches_expected(waveguide: Box, sub: Size2, size: Siz
                                               wg_height=wg_height,
                                               sub_height=wg_height,
                                               sub_eps=TEST_ONE.eps,
-                                              coupling_gap=gap,
+                                              gap=gap,
                                               rib_y=rib_y,
                                               block=block,
                                               vertical=vertical,
