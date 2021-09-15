@@ -49,7 +49,7 @@ def test_mode_matches_expected_beta(waveguide: Box, sub: Box, size: Size2, wg_he
          [0.105274, 0.107789, 0.094922, 0.121647, 0.147402, 0.099317]),
         (Box((0.2, 0.4), material=SILICON), Box((1.4, 0.2), material=AIR),
          (1.4, 1), 0.2, 0.2, 0, False, None, 0.2, (0, 0),
-         [4.084419e-03, 0, 3.316460e-02, 0, 2.053727e-02, 0],
+         [-9.200602e-03, 0, 3.316460e-02, 0, 2.053727e-02, 0],
          [0.105418, 0.107831, 0.096243, 0.124457, 0.167402, 0.110291]),
         (Box((0.2, 0.4), material=SILICON), Box((1.4, 0.2), material=AIR),
          (1.4, 1), 0.2, 0.2, 0, True, Box((0.2, 0.2), material=SILICON), 0.2, (0.2, 0.4),
@@ -80,7 +80,7 @@ def test_mode_matches_expected_mean_std(waveguide: Box, sub: Box, size: Size2, w
     "waveguide, size, wg_height, spacing",
     [
         (Box((0.36, 0.16), material=TEST_INF), (0.48, 0.24), 0.04, 0.02),
-        (Box((0.16, 0.36), material=TEST_INF), (0.24, 0.64), 0.06, 0.02),
+        (Box((0.16, 0.36), material=TEST_INF), (0.36, 0.64), 0.06, 0.01),
         # (Box((0.16, 0), material=TEST_INF), (0.24,), 0.06, 0.02),
     ],
 )
@@ -96,4 +96,4 @@ def test_mode_matches_expected_analytical_2d(waveguide: Box, size: Size2, wg_hei
     analytical = (np.sin(y / waveguide.size[1] * np.pi) * np.sin(x / waveguide.size[0] * np.pi))[:-1, :-1].squeeze()
     numerical = np.abs(modes.h(0)[1][modes.eps == 1e10].reshape(analytical.shape))
     numerical = numerical / np.max(numerical)
-    np.testing.assert_allclose(numerical, analytical, atol=2e-2)
+    np.testing.assert_allclose(numerical, analytical, rtol=1e-2, atol=1e-2)
