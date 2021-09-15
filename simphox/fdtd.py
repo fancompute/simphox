@@ -26,9 +26,9 @@ class FDTD(YeeGrid):
     """
 
     def __init__(self, size: Size, spacing: Spacing, eps: Union[float, np.ndarray] = 1,
-                 pml: Optional[Union[Shape, Size]] = None, pml_params: Size3 = (3, -35, 1, 5),
-                 use_jax: bool = True, name: str = 'fdtd'):
-        super(FDTD, self).__init__(size, spacing, eps, pml=pml, pml_params=pml_params, name=name)
+                 pml: Optional[Union[Shape, Size]] = None, pml_params: Size3 = (3, -35, 1),
+                 pml_sep: int = 5, use_jax: bool = True, name: str = 'fdtd'):
+        super(FDTD, self).__init__(size, spacing, eps, pml=pml, pml_params=pml_params, pml_sep=pml_sep, name=name)
         self.dt = 1 / np.sqrt(np.sum(1 / self.spacing ** 2))  # includes courant condition!
 
         # pml (internal to the grid / does not affect params, so specified here!)

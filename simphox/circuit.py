@@ -4,12 +4,13 @@ from .typing import List, Union, Callable, Optional, Size, Iterable
 
 import numpy as np
 import xarray as xr
-from dphox.component import Pattern, Multilayer
+from dphox.pattern import Pattern
+from dphox.device import Device
 from .fdfd import FDFD
 
 
 class Component:
-    def __init__(self, structure: Union[Pattern, Multilayer],
+    def __init__(self, structure: Union[Pattern, Device],
                  model: Union[xr.DataArray, Callable[[jnp.ndarray], xr.DataArray]], name: str):
         """A component in a circuit
 

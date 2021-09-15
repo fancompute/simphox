@@ -36,9 +36,9 @@ class OptProblem:
     For use with an inverse design problem (the primary use case in this module), the user can include an
     FDFD simulation and a source (to be fed into the FDFD solver). The FDFD simulation and source are then
     used to define a function :code:`S(eps) == S(T(rho))` that solves the FDFD problem
-    where `eps == T(rho)` (:math:`\epsilon(x, y)) := T(\\rho(x, y))`),
+    where `eps == T(rho)` (:math:`\\epsilon(x, y)) := T(\\rho(x, y))`),
     in which case the objective function evaluates :code:`C(S(T(rho)))`
-    (:math:`\epsilon(x, y)) := C(S(T((\\rho(x, y))))`).
+    (:math:`\\epsilon(x, y)) := C(S(T((\\rho(x, y))))`).
 
     Args:
         transform_fn: The JAX-transformable transform function to yield epsilon (identity if None,

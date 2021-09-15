@@ -10,6 +10,9 @@ try:
     from holoviews.streams import Pipe
     from holoviews import opts
     import panel as pn
+    from bokeh.models import Range1d, LinearAxis
+    from bokeh.models.renderers import GlyphRenderer
+    from bokeh.plotting.figure import Figure
 except ImportError:
     HOLOVIEWS_IMPORTED = False
 
@@ -21,16 +24,16 @@ except ImportError:
     K3D_IMPORTED = False
 
 from matplotlib import colors as mcolors
-from bokeh.models import Range1d, LinearAxis
-from bokeh.models.renderers import GlyphRenderer
-from bokeh.plotting.figure import Figure
 
 
-def _plot_twinx(plot, _):
+def _plot_twinx_bokeh(plot, _):
     """Hook to plot data on a secondary (twin) axis on a Holoviews Plot with Bokeh backend.
 
-    .. seealso::
-        The code was copied from https://github.com/holoviz/holoviews/issues/396.
+    Args:
+        plot: Holoviews plot object to hook for twinx
+
+    See Also:
+        The code was copied from a comment in https://github.com/holoviz/holoviews/issues/396.
         - http://holoviews.org/user_guide/Customizing_Plots.html#plot-hooks
         - https://docs.bokeh.org/en/latest/docs/user_guide/plotting.html#twin-axes
 
@@ -175,7 +178,7 @@ def hv_field_1d(field: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Op
     c1 = hv.Curve((x, (field + 1) / 2), kdims='x', vdims='field').opts(
         width=width, show_grid=True, framewise=True, yaxis='left', ylim=(-1, 1))
     c2 = hv.Curve((x, eps), kdims='x', vdims='eps').opts(width=width, show_grid=True, framewise=True, color='red',
-                                                         hooks=[_plot_twinx])
+                                                         hooks=[_plot_twinx_bokeh])
     return c1 * c2
 
 
@@ -197,7 +200,7 @@ def hv_power_1d(power: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Op
     c1 = hv.Curve((x, power), kdims='x', vdims='field').opts(width=width, show_grid=True, framewise=True,
                                                              yaxis='left', ylim=(-1, 1))
     c2 = hv.Curve((x, eps), kdims='x', vdims='eps').opts(width=width, show_grid=True, framewise=True, color='red',
-                                                         hooks=[_plot_twinx])
+                                                         hooks=[_plot_twinx_bokeh])
     return c1 * c2
 
 
