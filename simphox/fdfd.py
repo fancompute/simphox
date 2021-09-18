@@ -441,5 +441,5 @@ class FDFD(SimGrid):
                          np.exp(1j * self.pos[2][:-1] * k[2])).flatten()
         a = self.mat
         src = self.reshape((q @ a - a @ q) @ fsrc)  # qaaq = quack :)
-        raise NotImplementedError('TFSF profile')
+        raise NotImplementedError('TFSF profile not yet implemented.')
         return src

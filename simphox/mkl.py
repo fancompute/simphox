@@ -2,7 +2,6 @@ import sys
 from ctypes import CDLL, byref, c_char, c_int, c_int64, POINTER, c_float, c_double
 
 import numpy as np
-import scipy.sparse.linalg
 import scipy.sparse as sp
 from typing import Tuple
 

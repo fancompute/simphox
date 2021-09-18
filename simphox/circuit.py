@@ -12,12 +12,13 @@ from .fdfd import FDFD
 class Component:
     def __init__(self, structure: Union[Pattern, Device],
                  model: Union[xr.DataArray, Callable[[jnp.ndarray], xr.DataArray]], name: str):
-        """A component in a circuit
+        """A component in a circuit will have some structure that can be simulated
+        (a pattern or device defined in DPhox), a model, and a name string.
 
         Args:
-            structure: Structure
-            model: Model
-            name: Name of the component
+            structure: Structure of the device.
+            model: Model of the device (in terms of wavelength).
+            name: Name of the component (string representing the model name).
         """
         self.structure = structure
         self.model = model
@@ -50,7 +51,7 @@ class Component:
             rib_t: rib thickness for component (partial etch)
             bg_eps: background epsilon (usually 1 or air)
             profile_size_factor: profile size factor (multiply port size dimensions to get mode dimensions at each port)
-            pbar: progress bar
+            pbar: Progress bar (e.g. TQDM in a notebook which can be a valuable progress indicator).
 
         Returns:
             Initialize a component which contains a structure (for port specificication and visualization purposes)
@@ -96,6 +97,8 @@ class Component:
         return cls(pattern, model=model, name=name)
 
 
+
+
 def dc(epsilon):
     return jnp.array([
         [jnp.cos(np.pi / 4 + epsilon), 1j * jnp.sin(np.pi / 4 + epsilon)],
@@ -104,9 +107,9 @@ def dc(epsilon):
 
 
 def ps(upper, lower):
-    return np.array([
-        [np.exp(1j * upper), 0],
-        [0, np.exp(1j * lower)]
+    return jnp.array([
+        [jnp.exp(1j * upper), 0],
+        [0, jnp.exp(1j * lower)]
     ])
 
 
@@ -135,8 +138,8 @@ def diagonal_tree(n, m=0):
 
 def mesh(thetas, phis, network, phases=None, epsilons=None):
     ts, n = network
-    u = np.eye(n)
-    epsilons = np.zeros_like(thetas) if epsilons is None else epsilons
+    u = jnp.eye(n)
+    epsilons = jnp.zeros_like(thetas) if epsilons is None else epsilons
     for theta, phi, t, eps in zip(thetas, phis, ts, epsilons):
         u = mzi(theta, phi, n, *t, eps) @ u
     if phases is not None:
@@ -147,16 +150,16 @@ def mesh(thetas, phis, network, phases=None, epsilons=None):
 def nullify(vector, i, j=None):
     n = len(vector)
     j = i + 1 if j is None else j
-    theta = -np.arctan2(np.abs(vector[i]), np.abs(vector[j])) * 2
-    phi = np.angle(vector[i]) - np.angle(vector[j])
+    theta = -jnp.arctan2(np.abs(vector[i]), np.abs(vector[j])) * 2
+    phi = jnp.angle(vector[i]) - np.angle(vector[j])
     nullified_vector = mzi(theta, phi, n, i, j) @ vector
-    return np.mod(theta, 2 * np.pi), np.mod(phi, 2 * np.pi), nullified_vector
+    return jnp.mod(theta, 2 * jnp.pi), jnp.mod(phi, 2 * jnp.pi), nullified_vector
 
 
 # assumes topologically-ordered tree (e.g. above tree functions)
 def analyze(v, tree):
     ts, n = tree
-    thetas, phis = np.zeros(len(ts)), np.zeros(len(ts))
+    thetas, phis = jnp.zeros(len(ts)), jnp.zeros(len(ts))
     for i, t in enumerate(ts):
         thetas[i], phis[i], v = nullify(v, *t)
     return thetas, phis, v[0]
@@ -173,8 +176,8 @@ def triangular(u):
         thetas.extend(thetas_i)
         phis.extend(phis_i)
         mzi_lists.extend(mzi_lists_i)
-    phases = np.angle(np.diag(u))
-    return np.asarray(thetas), np.asarray(phis), (mzi_lists, n), phases
+    phases = jnp.angle(jnp.diag(u))
+    return jnp.asarray(thetas), jnp.asarray(phis), (mzi_lists, n), phases
 
 
 def generate(thetas, phis, tree, epsilons=None):
@@ -182,4 +185,4 @@ def generate(thetas, phis, tree, epsilons=None):
 
 
 def random_complex(n):
-    return np.random.randn(n) + np.random.randn(n) * 1j
+    return jnp.array(np.random.randn(n) + np.random.randn(n) * 1j)

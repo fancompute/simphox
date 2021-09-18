@@ -1,6 +1,9 @@
 from typing import Tuple, List
 
-from .mkl import spsolve_pardiso
+try:  # pardiso (using Intel MKL) is much faster than scipy's solver
+    from .mkl import spsolve_pardiso as _spsolve
+except OSError:  # if mkl isn't installed
+    from scipy.sparse.linalg import spsolve as _spsolve
 
 import numpy as np
 import scipy.sparse as sp
@@ -17,7 +20,7 @@ def _spsolve_hcb(ab: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]) -> jnp.ndarra
     a = sp.coo_matrix((a_entries, (a_indices[0], a_indices[1])), shape=(b.size, b.size))
     # caching is not necessary since the pardiso spsolve we are using caches the matrix factorization by default
     # replace with a better solver if available
-    return spsolve_pardiso(a, b.flatten())
+    return _spsolve(a, b.flatten())
 
 
 @jax.custom_vjp
