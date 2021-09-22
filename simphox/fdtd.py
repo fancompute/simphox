@@ -97,7 +97,7 @@ class FDTD(YeeGrid):
                 \\mathbf{H}(t + \\mathrm{d}t) &= \\mathbf{H}(t) +
                 \\mathrm{d}t \\frac{\\mathrm{d}\\mathbf{H}}{\\mathrm{d}t}
 
-            From Maxwell's equations, we have (for current source :math:`\mathbf{J}(t)`):
+            From Maxwell's equations, we have (for current source :math:`\\mathbf{J}(t)`):
 
             .. math::
                 \\frac{\\mathrm{d}\\mathbf{E}}{\\mathrm{d}t} = \\frac{1}{\\epsilon} \\nabla

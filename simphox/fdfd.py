@@ -1,18 +1,15 @@
-from .sim import SimGrid
-from .utils import d2curl_op, yee_avg_jax
-from .typing import Shape, Size, Spacing, Optional, Tuple, Union, SpSolve, Shape2, Size2, List, Callable, Dict, Size3
-
-import numpy as np
-import scipy.sparse as sp
-from scipy.sparse.linalg import eigs
-
 import jax
 import jax.numpy as jnp
+import numpy as np
+import scipy.sparse as sp
 from jax.config import config
-
 from jax.scipy.sparse.linalg import bicgstab
-from .utils import yee_avg_2d_z, curl_fn
+from scipy.sparse.linalg import eigs
+
 from .primitives import spsolve, TMOperator
+from .sim import SimGrid
+from .typing import Callable, Dict, List, Optional, Shape2, Size, Size2, Size3, Spacing, SpSolve, Tuple, Union
+from .utils import curl_fn, d2curl_op, yee_avg_2d_z, yee_avg_jax
 
 try:  # pardiso (using Intel MKL) is much faster than scipy's solver
     from .mkl import spsolve_pardiso, feast_eigs

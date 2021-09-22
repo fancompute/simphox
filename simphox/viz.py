@@ -187,8 +187,8 @@ def hv_field_2d(field: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Op
     extent = get_extent_2d(field.squeeze().T.shape, spacing)
     bounds = (extent[0], extent[2], extent[1], extent[3])
     aspect = (extent[3] - extent[2]) / (extent[1] - extent[0])
-    field_img = hv.Image(field.squeeze().T.real / np.max(np.abs(field)), bounds=bounds, vdims='field').opts(cmap=cmap, aspect=aspect,
-                                                                                             frame_width=width)
+    field_img = hv.Image(field.squeeze().T.real / np.max(np.abs(field)),
+                         bounds=bounds, vdims='field').opts(cmap=cmap, aspect=aspect, frame_width=width)
     eps_img = hv.Image(eps.T / np.max(eps), bounds=bounds).opts(cmap=mat_cmap, alpha=alpha, aspect=aspect, frame_width=width)
     return field_img.redim.range(field=(-1, 1)) * eps_img
 

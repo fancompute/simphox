@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - anaconda
 dependencies:
-  - python=3.7
+  - python=3.9
   - numpy
   - scipy
   - sphinx-autodoc-typehints
@@ -11,3 +11,5 @@ dependencies:
   - xarray
   - scikit-image
   - matplotlib
+  - myst-parser
+  - autodoc-pydantic

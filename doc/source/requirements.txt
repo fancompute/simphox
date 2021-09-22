@@ -1,2 +1,4 @@
 sphinx-autodoc-typehints
 sphinx-autodoc-annotation
+autodoc_pydantic
+myst_parser

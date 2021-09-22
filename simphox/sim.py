@@ -84,20 +84,20 @@ class SimGrid(YeeGrid):
         )
         return SimCrossSection(modes, center, size, wavelength)
 
-    def mode_source(self, center: Size, size: Size, wavelength: float = 1.55, mode_idx: int = 0):
-        """For waveguide-related problems or shining light into a photonic port, an eigenmode source is used.
-
-        Args:
-            center: center tuple of the form :code:`(x, y, z)`
-            size: size of the source
-            wavelength: wavelength (arb. units, should match with spacing)
-            mode_idx: mode index for the eigenmode for source profile
-
-        Returns:
-            Eigenmode source function and region (:code:`slice` object or mask).
-        """
-        sim_xs = self.modes(center, size, wavelength, num_modes=mode_idx + 1)
-        return cw_source_fn(profile, wavelength, gpu), region
+    # def mode_source(self, center: Size, size: Size, wavelength: float = 1.55, mode_idx: int = 0):
+    #     """For waveguide-related problems or shining light into a photonic port, an eigenmode source is used.
+    #
+    #     Args:
+    #         center: center tuple of the form :code:`(x, y, z)`
+    #         size: size of the source
+    #         wavelength: wavelength (arb. units, should match with spacing)
+    #         mode_idx: mode index for the eigenmode for source profile
+    #
+    #     Returns:
+    #         Eigenmode source function and region (:code:`slice` object or mask).
+    #     """
+    #     sim_xs = self.modes(center, size, wavelength, num_modes=mode_idx + 1)
+    #     return cw_source_fn(profile, wavelength, gpu), region
 
     # def cw_source(self, profile: np.ndarray, wavelength: float, t: float, dt: float) -> np.ndarray:
     #     """CW source array
@@ -186,6 +186,7 @@ class SimGrid(YeeGrid):
     #     """
     #     src = self.gaussian_source(profiles, pulse_width, center_wavelength, dt, t0, linear_chirp)
     #     return lambda tt: src[tt // dt]
+
     def port_modes(self, excitation: List[Tuple[str, int]] = None,
                    profile_size_factor: float = 3, wavelength: float = 1.55) -> Dict[PortLabel, SimCrossSection]:
         """Profile for all the ports in the grid (always assumed to be along x or y axes!).

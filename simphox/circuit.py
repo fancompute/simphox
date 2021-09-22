@@ -1,12 +1,11 @@
 import jax.numpy as jnp
-
-from .typing import List, Union, Callable, Optional, Size, Iterable
-
 import numpy as np
 import xarray as xr
-from dphox.pattern import Pattern
 from dphox.device import Device
+from dphox.pattern import Pattern
+
 from .fdfd import FDFD
+from .typing import Callable, Iterable, List, Optional, Size, Union
 
 
 class Component:

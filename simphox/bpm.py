@@ -23,8 +23,7 @@ class BPM(SimGrid):
             eps=eps,
             bloch_phase=bloch_phase,
             pml=pml,
-            pml_params=pml_params,
-            yee_avg=yee_avg
+            pml_params=pml_params
         )
 
         if self.ndim == 1:
