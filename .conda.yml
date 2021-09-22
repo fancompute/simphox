@@ -12,4 +12,3 @@ dependencies:
   - scikit-image
   - matplotlib
   - myst-parser
-  - autodoc-pydantic
