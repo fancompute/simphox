@@ -1,6 +1,9 @@
 numpy
 scipy
 matplotlib
+xarray
+bokeh
+holoviews
 jaxlib
 jax
 scikit-image
