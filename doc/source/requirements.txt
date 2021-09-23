@@ -1,6 +1,7 @@
 numpy
 scipy
 matplotlib
+jaxlib
 jax
 scikit-image
 bokeh
