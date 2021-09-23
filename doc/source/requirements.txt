@@ -1,3 +1,9 @@
+numpy
+scipy
+matplotlib
+jax
+scikit-image
+bokeh
 sphinx-autodoc-typehints
 sphinx-autodoc-annotation
 autodoc_pydantic

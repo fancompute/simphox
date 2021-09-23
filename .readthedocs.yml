@@ -1,12 +1,9 @@
 version: 2
 
-conda:
-  environment: .conda.yml
-
 python:
-  version: 3.7
+  version: 3.8
   install:
-    - requirements: doc/requirements.txt
+    - requirements: doc/source/requirements.txt
     - method: setuptools
       path: .
 
