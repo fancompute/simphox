@@ -43,9 +43,9 @@ class FDFD(SimGrid):
         which can be written in the form :math:`A \\mathbf{e} = \\mathbf{b}`, where:
 
         .. math::
-            A = \\nabla \\times \\mu^{-1} \\nabla \\times - k_0^2 \\epsilon
+            A &= \\nabla \\times \\mu^{-1} \\nabla \\times - k_0^2 \\epsilon
 
-            \\mathbf{b} = k_0 \\mathbf{j}
+            \\mathbf{b} &= k_0 \\mathbf{j}
 
         is an operator representing the discretized EM wave operator at frequency
         :math:`\\omega = k_0 = \\frac{2\\pi}{\\lambda}`.
@@ -57,9 +57,9 @@ class FDFD(SimGrid):
         The form of this problem is :math:`A_z \\mathbf{e}_z = \\mathbf{b}_z`, where:
 
         .. math::
-            A = (\\nabla \\times \\mu^{-1} \\nabla \\times)_z + k_0^2 \\epsilon_z
+            A &= (\\nabla \\times \\mu^{-1} \\nabla \\times)_z + k_0^2 \\epsilon_z
 
-            \\mathbf{b}_z = k_0 \\mathbf{j}_z
+            \\mathbf{b}_z &= k_0 \\mathbf{j}_z
 
     Attributes:
         size: Tuple of size 1, 2, or 3 representing the size in the grid in arbitrary units
@@ -170,7 +170,7 @@ class FDFD(SimGrid):
 
         Mathematically, this represents rearranging the Maxwell equation in the frequency domain:
         ..math::
-            i \\omega \\mu \\mathbf{h} = \\nabla \times \\mathbf{e}.
+            i \\omega \\mu \\mathbf{h} &= \\nabla \times \\mathbf{e}.
 
         Returns:
             The h-field converted from the e-field.
@@ -185,7 +185,7 @@ class FDFD(SimGrid):
 
         Mathematically, this represents rearranging the Maxwell equation in the frequency domain:
         ..math::
-            -i \\omega \\epsilon \\mathbf{e} = \\nabla \\times \\mathbf{h}.
+            -i \\omega \\epsilon \\mathbf{e} &= \\nabla \\times \\mathbf{h}.
 
         Returns:
             The e-field converted from the h-field.

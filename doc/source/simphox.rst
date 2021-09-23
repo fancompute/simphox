@@ -4,14 +4,6 @@ simphox package
 Submodules
 ----------
 
-simphox.bpm module
-------------------
-
-.. automodule:: simphox.bpm
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 simphox.circuit module
 ----------------------
 
@@ -32,14 +24,6 @@ simphox.fdfd module
 -------------------
 
 .. automodule:: simphox.fdfd
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-simphox.fdtd module
--------------------
-
-.. automodule:: simphox.fdtd
    :members:
    :undoc-members:
    :show-inheritance:

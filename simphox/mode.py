@@ -45,9 +45,9 @@ class ModeSolver(YeeGrid):
         $\\mathbf{h}_m = (0, 0, h_z(y)) e^{-i\\beta_m x}$. The solutions for $h_z(y)$ correspond to the simple equation:
 
         .. math::
-            \\beta^2 h_z = \\partial_y^2 h_z + k_0^2 \\epsilon_z h_z
+            \\beta^2 h_z &= \\partial_y^2 h_z + k_0^2 \\epsilon_z h_z
 
-            \\beta_m^2 \\mathbf{h}_{m} = C_{\\mathrm{1d}} \\mathbf{h}_{m}
+            \\beta_m^2 \\mathbf{h}_{m} &= C_{\\mathrm{1d}} \\mathbf{h}_{m}
 
         For the 2d case, we cannot make this type of assumption.
         Instead we solve the frequency-domain Maxwell's equations for the case of $z$-translation symmetry
@@ -98,7 +98,7 @@ class ModeSolver(YeeGrid):
         The WGM operator :math:`C(\\omega)` acts on the magnetic field
         :math:`\\mathbf{h}` of the form :code:`(hx, hy)`, which assumes cross-section translational x-symmetry:
         .. math::
-            C \\mathbf{h}_m = \\lambda_m \\mathbf{h}_m,
+            C \\mathbf{h}_m &= \\lambda_m \\mathbf{h}_m,
         where :math:`0 \\leq m < M` for the :math:`M` modes with the largest wavenumbers
         (:math:`\\beta_m = \\sqrt{\\lambda_m}`).
 
@@ -130,7 +130,7 @@ class ModeSolver(YeeGrid):
 
         Mathematically, this represents rearranging the Maxwell equation in the frequency domain:
         ..math::
-            i \\omega \\mu \\mathbf{h} = \\nabla \\times \\mathbf{e}
+            i \\omega \\mu \\mathbf{h} &= \\nabla \\times \\mathbf{e}
 
         Returns:
             The h-field converted from the e-field.
@@ -160,7 +160,7 @@ class ModeSolver(YeeGrid):
         Solve for waveguide modes (x-translational symmetry) by finding the eigenvalues of :math:`C`.
 
         .. math::
-            C \\mathbf{h}_m = \\lambda_m \\mathbf{h}_m,
+            C \\mathbf{h}_m &= \\lambda_m \\mathbf{h}_m,
 
         where :math:`0 \\leq m < M` for the :math:`M` (`num_modes`) modes with the largest wavenumbers
         (:math:`\\beta_m = \\sqrt{\\lambda_m}`).

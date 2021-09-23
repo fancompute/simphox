@@ -100,10 +100,10 @@ class FDTD(YeeGrid):
             From Maxwell's equations, we have (for current source :math:`\\mathbf{J}(t)`):
 
             .. math::
-                \\frac{\\mathrm{d}\\mathbf{E}}{\\mathrm{d}t} = \\frac{1}{\\epsilon} \\nabla
+                \\frac{\\mathrm{d}\\mathbf{E}}{\\mathrm{d}t} &= \\frac{1}{\\epsilon} \\nabla
                 \\times \\mathbf{H}(t) + \\mathbf{J}(t)
 
-                \\frac{\\mathrm{d}\\mathbf{H}}{\\mathrm{d}t} = -\\frac{1}{\\mu} \\nabla \\times
+                \\frac{\\mathrm{d}\\mathbf{H}}{\\mathrm{d}t} &= -\\frac{1}{\\mu} \\nabla \\times
                 \\mathbf{E}(t) + \\mathbf{M}(t)
 
             The recurrent update assumes that :math:`\\mu = c = 1, \\mathbf{M}(t) = \\mathbf{0}` and factors in
@@ -111,16 +111,16 @@ class FDTD(YeeGrid):
             vector, namely :math:`\\boldsymbol{\\Psi}_E(t)` and :math:`\\boldsymbol{\\Psi}_H(t)`.
 
             .. math::
-                \\mathbf{\\Psi_E}^{(t+1/2)} = \\mathbf{b} \\mathbf{\\Psi_E}^{(t-1/2)} +
+                \\mathbf{\\Psi_E}^{(t+1/2)} &= \\mathbf{b} \\mathbf{\\Psi_E}^{(t-1/2)} +
                 \\nabla_{\\mathbf{c}} \\times \\mathbf{H}^{(t)}
 
-                \\mathbf{\\Psi_H}^{(t + 1)} = \\mathbf{b} \mathbf{\\Psi_H}^{(t)} +
+                \\mathbf{\\Psi_H}^{(t + 1)} &= \\mathbf{b} \mathbf{\\Psi_H}^{(t)} +
                 \\nabla_{\\mathbf{c}} \\times \\mathbf{E}^{(t)}
 
-                \\mathbf{E}^{(t+1/2)} = \\mathbf{E}^{(t-1/2)} + \\frac{\\Delta t}{\\epsilon} \\left(\\nabla \\times
+                \\mathbf{E}^{(t+1/2)} &= \\mathbf{E}^{(t-1/2)} + \\frac{\\Delta t}{\\epsilon} \\left(\\nabla \\times
                 \\mathbf{H}^{(t)} + \\mathbf{J}^{(t)} + \mathbf{\Psi_E}^{(t+1/2)}\\right)
 
-                \\mathbf{H}^{(t + 1)} = \\mathbf{H}^{(t)} - \\Delta t \\left(\\nabla \\times \\mathbf{E}^{(t+1/2)} +
+                \\mathbf{H}^{(t + 1)} &= \\mathbf{H}^{(t)} - \\Delta t \\left(\\nabla \\times \\mathbf{E}^{(t+1/2)} +
                 \\mathbf{\\Psi_H}^{(t + 1)}\\right)
 
 
