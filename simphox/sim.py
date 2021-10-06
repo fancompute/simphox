@@ -492,7 +492,7 @@ class SimGrid(YeeGrid):
                 "direction": ["x", "y", "z"],
                 "x": self.pos[0][:-1] if self.pos[0].size > 1 else [0],
                 "y": self.pos[1][:-1] if self.pos[1].size > 1 else [0],
-                "z": self.pos[2][:-1] if self.pos[2].size > 1 is not None else [0]
+                "z": self.pos[2][:-1] if self.pos[2].size > 1 else [0]
             }
         )
 
@@ -504,19 +504,21 @@ class SimGrid(YeeGrid):
                 "direction": ["x", "y", "z"],
                 "x": self.pos[0][:-1] + 0.5 * self.spacing3[0] if self.pos[0].size > 1 else [0],
                 "y": self.pos[1][:-1] + 0.5 * self.spacing3[1] if self.pos[1].size > 1 else [0],
-                "z": self.pos[2][:-1] + 0.5 * self.spacing3[2] if self.pos[2].size > 1 is not None else [0]
+                "z": self.pos[2][:-1] + 0.5 * self.spacing3[2] if self.pos[2].size > 1 else [0]
             }
         )
         return decorated_sparams, decorated_e, decorated_h
 
     def fidelity(self, desired_sparams: Union[Dict[Tuple[str, int], np.complex128], Dict[str, np.complex128]],
-                 measure_info: List[Tuple[str, int]] = None) -> Callable:
+                 measure_info: List[Tuple[str, int]] = None, insertion_weight: float = 0) -> Callable:
         """Returns the fidelity for the :code:`sparams`.
 
         Args:
             desired_sparams: The desired sparams, provided in dictionary form mapping port to relative magnitude;
                 if not an ndarray and/or not normalized, it is converted to a normalized ndarray.
             measure_info: Measurement info consisting of a list of port name and mode index pairs (used to index s)
+            insertion_weight: Renormalize s-params to separate insertion loss and sparams. Then, weight insertion by
+                :code:`insertion_weight` and sparams by :code:`1 - insertion_weight`. If zero, ignore.
 
         Returns:
             The fidelity based on the desired sparams :code:`s`.
@@ -530,8 +532,15 @@ class SimGrid(YeeGrid):
             s[measure_info.index(key)] = weight
         s = jnp.array(s / np.linalg.norm(s))
 
-        def obj(sparams_fields: Tuple[jnp.ndarray, jnp.ndarray]):
-            sparams, fields = sparams_fields
-            return -jnp.abs(s @ sparams) ** 2, jax.lax.stop_gradient((sparams, fields))
+        if insertion_weight != 0:
+            def obj(sparams_fields: Tuple[jnp.ndarray, jnp.ndarray]):
+                sparams, fields = sparams_fields
+                insertion_sqrt = jnp.linalg.norm(sparams)
+                cost = -jnp.abs(s @ (sparams / insertion_sqrt)) ** 2 * (1 - insertion_weight) - insertion_sqrt ** 2 * insertion_weight
+                return cost, jax.lax.stop_gradient((sparams, fields))
+        else:
+            def obj(sparams_fields: Tuple[jnp.ndarray, jnp.ndarray]):
+                sparams, fields = sparams_fields
+                return -jnp.abs(s @ sparams) ** 2, jax.lax.stop_gradient((sparams, fields))
 
         return obj

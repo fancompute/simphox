@@ -10,7 +10,7 @@ from .utils import curl_fn, yee_avg, fix_dataclass_init_docs, Box
 
 try:
     DPHOX_IMPORTED = True
-    from dphox.component import Pattern
+    from dphox.pattern import Pattern
 except ImportError:
     DPHOX_IMPORTED = False
 
@@ -105,16 +105,16 @@ class Grid:
             self.eps = np.ones_like(self.eps) * eps
         return self
 
-    def add(self, component: "Pattern", eps: float, zmin: float = None, thickness: float = None) -> "Grid":
+    def add(self, component: "Pattern", eps: float, zmin: float = None, thickness: float = None,
+            smooth_feature: float = 0) -> "Grid":
         """Add a component to the grid.
-
-        Spe
 
         Args:
             component: component to add
             eps: permittivity of the component being added (isotropic only, for now)
             zmin: minimum z extent of the component
             thickness: component thickness (`zmax = zmin + thickness`)
+            smooth_feature: erode, dilate twice, erode to smooth out any component features for simulation / fab
 
         Returns:
             The modified :code:`Grid` for chaining (:code:`self`)
@@ -124,7 +124,7 @@ class Grid:
         if not b[0] >= 0 and b[1] >= 0 and b[2] <= self.size[0] and b[3] <= self.size[1]:
             raise ValueError('The pattern must have min x, y >= 0 and max x, y less than size.')
         self.components.append(component)
-        mask = component.mask(self.shape[:2], self.spacing)
+        mask = component.mask(self.shape[:2], self.spacing, smooth_feature=smooth_feature)
         if self.ndim == 2:
             self.eps[mask == 1] = eps
         else:

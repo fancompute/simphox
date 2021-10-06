@@ -4,18 +4,11 @@ simphox package
 Submodules
 ----------
 
+
 simphox.circuit module
 ----------------------
 
 .. automodule:: simphox.circuit
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-simphox.constants module
-------------------------
-
-.. automodule:: simphox.constants
    :members:
    :undoc-members:
    :show-inheritance:
@@ -28,18 +21,11 @@ simphox.fdfd module
    :undoc-members:
    :show-inheritance:
 
+
 simphox.grid module
 -------------------
 
 .. automodule:: simphox.grid
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-simphox.material module
------------------------
-
-.. automodule:: simphox.material
    :members:
    :undoc-members:
    :show-inheritance:
@@ -92,14 +78,6 @@ simphox.transform module
    :undoc-members:
    :show-inheritance:
 
-simphox.typing module
----------------------
-
-.. automodule:: simphox.typing
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 simphox.utils module
 --------------------
 
@@ -115,7 +93,6 @@ simphox.viz module
    :members:
    :undoc-members:
    :show-inheritance:
-
 
 Module contents
 ---------------

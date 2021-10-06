@@ -11,7 +11,7 @@ from .viz import plot_power_2d, plot_field_2d, plot_field_1d, hv_field_1d, hv_fi
 try:  # pardiso (using Intel MKL) is much faster than scipy's solver
     from .mkl import feast_eigs
 except OSError:  # if mkl isn't installed
-    from scipy.sparse.linalg import spsolve
+    pass
 
 try:
     from dphox.component import Pattern
@@ -35,14 +35,15 @@ class ModeSolver(YeeGrid):
         interferometers (MMIs).
 
         We can solve either the 1d or 2d case using 1 or 2 components of the field respectively.
-        Note that in `simphox` units, we assume $k_0 = \\frac{2\\pi}{\\lambda} = \\omega$,
-        letting $c = \\epsilon_0 = \\mu_0 = 1$ for simplicity. We define the *wavenumber* $\\beta_m$ for mode $m$ to be
-        the square root of the eigenvalue (hence the $\beta^2$ terms in the later equations) of $C_{\\mathrm{1d}}$ and
-        $C_{\\mathrm{2d}}$ for the respective problems.
+        Note that in `simphox` units, we assume :math:`k_0 = \\frac{2\\pi}{\\lambda} = \\omega`,
+        letting :math:`c = \\epsilon_0 = \\mu_0 = 1` for simplicity. We define the *wavenumber* :math`:\\beta_m`
+        for mode :math:`m` to be the square root of the eigenvalue (hence the :math:`\beta^2` terms in the later
+        equations) of :math:`C_{\\mathrm{1d}}` and :math:`C_{\\mathrm{2d}}` for the respective problems.
 
         For the 1d case, we consider the case where the simulation is a line cross-section of a 2d grid in the
-        $xy$-plane. In that case, we solve for the $z$-component of an $h_z$-polarized mode of the form
-        $\\mathbf{h}_m = (0, 0, h_z(y)) e^{-i\\beta_m x}$. The solutions for $h_z(y)$ correspond to the simple equation:
+        :math:`xy`-plane. In that case, we solve for the $z$-component of an :math:`h_z`-polarized mode of the form
+        :math:`\\mathbf{h}_m = (0, 0, h_z(y)) e^{-i\\beta_m x}`. The solutions for :math:`h_z(y)` correspond to the
+        simple equation:
 
         .. math::
             \\beta^2 h_z &= \\partial_y^2 h_z + k_0^2 \\epsilon_z h_z
@@ -50,9 +51,10 @@ class ModeSolver(YeeGrid):
             \\beta_m^2 \\mathbf{h}_{m} &= C_{\\mathrm{1d}} \\mathbf{h}_{m}
 
         For the 2d case, we cannot make this type of assumption.
-        Instead we solve the frequency-domain Maxwell's equations for the case of $z$-translation symmetry
+        Instead we solve the frequency-domain Maxwell's equations for the case of :math:`z`-translation symmetry
         (here, we consider propagation along $z$ instead of $x$ to match convention).
-        This time, we solve for an $\\mathbf{h}$-field of the form $\\mathbf{h}_m = \\mathbf{h}(x, y) e^{-i\\beta_m z}$.
+        This time, we solve for an :math:`\\mathbf{h}`-field of the form
+        :math:`\\mathbf{h}_m = \\mathbf{h}(x, y) e^{-i\\beta_m z}`.
         This is made possible by the following set of coupled differential equations:
 
         .. math::
@@ -97,8 +99,10 @@ class ModeSolver(YeeGrid):
 
         The WGM operator :math:`C(\\omega)` acts on the magnetic field
         :math:`\\mathbf{h}` of the form :code:`(hx, hy)`, which assumes cross-section translational x-symmetry:
+
         .. math::
             C \\mathbf{h}_m &= \\lambda_m \\mathbf{h}_m,
+
         where :math:`0 \\leq m < M` for the :math:`M` modes with the largest wavenumbers
         (:math:`\\beta_m = \\sqrt{\\lambda_m}`).
 
@@ -129,7 +133,8 @@ class ModeSolver(YeeGrid):
         Usage is: :code:`h = mode.e2h(e)`, where :code:`e` is grid-shaped (not flattened)
 
         Mathematically, this represents rearranging the Maxwell equation in the frequency domain:
-        ..math::
+
+        .. math::
             i \\omega \\mu \\mathbf{h} &= \\nabla \\times \\mathbf{e}
 
         Returns:
@@ -144,7 +149,8 @@ class ModeSolver(YeeGrid):
         Usage is: :code:`e = mode.h2e(h)`, where :code:`h` is grid-shaped (not flattened)
 
         Mathematically, this represents rearranging the Maxwell equation in the frequency domain:
-        ..math::
+
+        .. math::
             -i \\omega \\epsilon \\mathbf{e} = \\nabla \\times \\mathbf{h}.
 
         Returns:
@@ -154,7 +160,7 @@ class ModeSolver(YeeGrid):
         return self.curl_fn(of_h=True, beta=beta)(self.reshape(h)) / (1j * self.k0 * self.eps_t)
 
     def solve(self, max_num_modes: int = 6, beta_guess: Optional[Union[float, Size2]] = None,
-              tol: float = 1e-7) -> Tuple[np.ndarray, np.ndarray]:
+              mode_guess: Optional[np.ndarray] = None, tol: float = 1e-7) -> Tuple[np.ndarray, np.ndarray]:
         """FDFD waveguide mode solver
 
         Solve for waveguide modes (x-translational symmetry) by finding the eigenvalues of :math:`C`.
@@ -169,6 +175,7 @@ class ModeSolver(YeeGrid):
             max_num_modes: Maximum number of modes to return (less are returned if they correspond
                 to an imaginary :math:`\\beta`).
             beta_guess: Guess for propagation constant :math:`\\beta` (the eigenvalue).
+            mode_guess: Guess for the mode :math:`\\boldsymbol{h}`
             tol: Tolerance of the mode eigensolver.
 
         Returns:
@@ -201,7 +208,8 @@ class ModeSolver(YeeGrid):
             h = eigvecs
 
         h = h.T
-        return np.sqrt(eigvals[useful_modes].real), h * np.exp(-1j * np.angle(h[:, :1]))  # ensure phase doesn't between runs
+        max_idx = np.argmax(np.abs(h), axis=0)
+        return np.sqrt(eigvals[useful_modes].real), h * np.exp(-1j * np.angle(h[:, max_idx]))
 
     def dispersion_sweep(self, wavelengths: np.ndarray, m: int = 6, pbar: Callable = None):
         """Dispersion sweep for cross sectional modes

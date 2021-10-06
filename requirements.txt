@@ -1,5 +1,7 @@
 numpy
 scipy
+pandas
+pydantic
 matplotlib
 jax
 scikit-image

@@ -17,7 +17,7 @@ except OSError:  # if mkl isn't installed
     from scipy.sparse.linalg import spsolve
 
 try:
-    from dphox.component import Pattern
+    from dphox.pattern import Pattern
     DPHOX_INSTALLED = True
 except ImportError:
     DPHOX_INSTALLED = False
@@ -261,7 +261,8 @@ class FDFD(SimGrid):
     @classmethod
     def from_pattern(cls, component: "Pattern", core_eps: float, clad_eps: float, spacing: float, boundary: Size,
                      pml: float, wavelength: float, component_t: float = 0, component_zmin: Optional[float] = None,
-                     rib_t: float = 0, sub_z: float = 0, height: float = 0, bg_eps: float = 1, name: str = 'fdfd'):
+                     rib_t: float = 0, sub_z: float = 0, height: float = 0, bg_eps: float = 1, smooth_feature: float = 0,
+                     name: str = 'fdfd'):
         """Initialize an FDFD from a Pattern defined in DPhox.
 
         Args:
@@ -278,6 +279,7 @@ class FDFD(SimGrid):
             component_t: component thickness
             rib_t: rib thickness for component (partial etch)
             bg_eps: background epsilon (usually 1 or air/vacuum)
+            smooth_feature: erode, dilate twice, erode to smooth out any existing component features
             name: Name of the component
 
         Returns:
@@ -295,7 +297,7 @@ class FDFD(SimGrid):
         grid = cls(size, spacing, wavelength=wavelength, eps=bg_eps, pml=pml, name=name)
         grid.fill(sub_z + rib_t, core_eps)
         grid.fill(sub_z, clad_eps)
-        grid.add(component, core_eps, component_zmin, component_t)
+        grid.add(component, core_eps, component_zmin, component_t, smooth_feature=smooth_feature)
         return grid
 
     def sparams(self, port_name: str, mode_idx: int = 0, measure_info: Optional[Dict[str, List[int]]] = None):

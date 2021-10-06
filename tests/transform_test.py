@@ -1,13 +1,14 @@
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from simphox.transform import get_symmetry_fn, get_mask_fn, get_smooth_fn
-from simphox.typing import Union, List
+from simphox.transform import get_mask_fn, get_smooth_fn, get_symmetry_fn
+from simphox.typing import List, Union
 from simphox.utils import Box
 
 np.random.seed(0)
 
-TEST_ARRAY = np.array([[4., 0., 4., 4., 0.],
+TEST_ARRAY = jnp.array([[4., 0., 4., 4., 0.],
                        [0., 4., 0., 4., 4.],
                        [4., 0., 0., 4., 0.],
                        [0., 4., 4., 0., 0.],
@@ -15,13 +16,13 @@ TEST_ARRAY = np.array([[4., 0., 4., 4., 0.],
                        [4., 4., 4., 0., 4.],
                        [0., 0., 0., 4., 0.]])
 
-TEST_ARRAY_SQUARE = np.array([[0., 0., 0., 8., 0.],
+TEST_ARRAY_SQUARE = jnp.array([[0., 0., 0., 8., 0.],
                               [8., 8., 0., 0., 8.],
                               [8., 0., 0., 8., 0.],
                               [0., 8., 8., 0., 0.],
                               [8., 0., 0., 8., 8.]])
 
-TEST_ARRAY_SQUARE_ONES = np.ones_like(TEST_ARRAY_SQUARE)
+TEST_ARRAY_SQUARE_ONES = jnp.ones_like(TEST_ARRAY_SQUARE)
 
 
 @pytest.mark.parametrize(
@@ -52,7 +53,7 @@ TEST_ARRAY_SQUARE_ONES = np.ones_like(TEST_ARRAY_SQUARE)
     ]
 )
 def test_get_symmetry_fn(ortho_x: bool, ortho_y: bool, expected_output: np.ndarray):
-    actual = get_symmetry_fn(ortho_x, ortho_y)(TEST_ARRAY)
+    actual = get_symmetry_fn(ortho_x, ortho_y, avg=True)(TEST_ARRAY)
     np.testing.assert_allclose(actual, expected_output)
 
 
@@ -98,7 +99,7 @@ def test_get_symmetry_fn(ortho_x: bool, ortho_y: bool, expected_output: np.ndarr
     ]
 )
 def test_get_symmetry_fn_square(ortho_x: bool, ortho_y: bool, diag_p: bool, diag_n: bool, expected_output: np.ndarray):
-    actual = get_symmetry_fn(ortho_x, ortho_y, diag_p, diag_n)(TEST_ARRAY_SQUARE)
+    actual = get_symmetry_fn(ortho_x, ortho_y, diag_p, diag_n, avg=True)(TEST_ARRAY_SQUARE)
     np.testing.assert_allclose(actual, expected_output)
 
 

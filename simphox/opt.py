@@ -155,6 +155,7 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
 
     # define opt_problems
     opt_problems = [opt_problem] if isinstance(opt_problem, OptProblem) else opt_problem
+    n_problems = len(opt_problems)
 
     # opt problems that include both an FDFD sim and a source sim
     sim_opt_problems = [op for op in opt_problems if op.sim is not None and op.source is not None]
@@ -168,7 +169,7 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
 
     def overall_cost_fn(rho: jnp.ndarray):
         evals = [op.cost_fn(s(rho)) if s is not None else op.cost_fn(rho) for op, s in zip(opt_problems, solve_fn)]
-        return jnp.array([obj for obj, _ in evals]).sum(), [aux for _, aux in evals]
+        return jnp.array([obj for obj, _ in evals]).sum() / n_problems, [aux for _, aux in evals]
 
     # Define a compiled update step
     def step_(current_step, state):
@@ -222,7 +223,7 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
             if eps_interval > 0 and i % eps_interval == 0:
                 history[f'eps/{sop.sim.name}'].append((i, sop.sim.eps))
             if field_interval > 0 and i % field_interval == 0:
-                history[f'field/{sop.sim.name}'].append((i, hz))
+                history[f'field/{sop.sim.name}'].append((i, hz.T))
         iterator.set_description(f"𝓛: {v:.5f}")
         costs.append(v)
         if viz is not None:
@@ -231,7 +232,7 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
 
     all_metric_names = sum([metric_names for _, metric_names in viz.metric_config.items()], [])
     metrics = xarray.DataArray(
-        data=np.asarray([[history[f'{metric_name}/{sop.sim.name}']
+        data=np.array([[history[f'{metric_name}/{sop.sim.name}']
                           for metric_name in all_metric_names] for sop in sim_opt_problems]),
         coords={
             'name': [sop.sim.name for sop in sim_opt_problems],
@@ -240,9 +241,9 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
         },
         dims=['name', 'metric', 'iteration'],
         name='metrics'
-    ) if sim_opt_problems else []
+    ) if sim_opt_problems and metric_interval != 0 else []
     eps = xarray.DataArray(
-        data=np.asarray([[eps for _, eps in history[f'eps/{sop.sim.name}']] if eps_interval > 0 else []
+        data=np.array([[eps for _, eps in history[f'eps/{sop.sim.name}']] if eps_interval > 0 else []
                          for sop in sim_opt_problems]),
         coords={
             'name': [sop.sim.name for sop in sim_opt_problems],
@@ -252,7 +253,7 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
         },
         dims=['name', 'iteration', 'x', 'y'],
         name='eps'
-    ) if sim_opt_problems else []
+    ) if sim_opt_problems and eps_interval != 0 else []
     fields = xarray.DataArray(
         data=np.asarray([[field for _, field in history[f'field/{sop.sim.name}']] if field_interval > 0 else []
                          for sop in sim_opt_problems]),
@@ -264,7 +265,7 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
         },
         dims=['name', 'iteration', 'x', 'y'],
         name='fields'
-    ) if sim_opt_problems else []
+    ) if sim_opt_problems and field_interval != 0 else []
     return OptRecord(costs=np.asarray(costs), params=get_params(opt_state), metrics=metrics, eps=eps, fields=fields)
 
 
