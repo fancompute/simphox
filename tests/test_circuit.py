@@ -2,13 +2,13 @@ import numpy as np
 import jax.numpy as jnp
 import pytest
 from scipy.stats import unitary_group
-from itertools import product
+from itertools import product, zip_longest
 
 from simphox.circuit import configure_vector, configure_unitary, CouplingNode, CouplingCircuit, tree, random_complex
 
 np.random.seed(0)
 
-N = np.arange(2, 16)
+N = [2, 4, 7, 10, 15, 16]
 
 RAND_VECS = [random_complex(n, normed=True) for n in N]
 RAND_UNITARIES = [unitary_group.rvs(n) for n in N]
@@ -43,6 +43,34 @@ def test_vector_configure(v: np.ndarray, balanced: bool):
     circuit, thetas, phis, gammas, _ = configure_vector(v, balanced=balanced)
     res = circuit.matrix_fn(use_jax=False)(thetas, phis, gammas) @ v
     np.testing.assert_allclose(res, np.eye(v.size)[v.size - 1], atol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "u, balanced",
+    product(RAND_UNITARIES, [True, False])
+)
+def test_unitary_configure(u: np.ndarray, balanced: bool):
+    circuit, thetas, phis, gammas = configure_unitary(u, balanced=balanced)
+    res = circuit.matrix_fn(use_jax=False)(thetas, phis, gammas)
+    np.testing.assert_allclose(res, u.T.conj(), atol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "u, num_levels",
+    zip_longest(RAND_UNITARIES, [2 * n - 3 for n in N])
+)
+def test_triangular_columns(u: np.ndarray, num_levels: int):
+    circuit, _, _, _ = configure_unitary(u, balanced=False)
+    np.testing.assert_allclose(circuit.num_levels, num_levels, atol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "u, num_levels",
+    zip_longest(RAND_UNITARIES, [1, 5, 14, 25, 45, 49])
+)
+def test_cascade_columns(u: np.ndarray, num_levels: int):
+    circuit, _, _, _ = configure_unitary(u, balanced=True)
+    np.testing.assert_allclose(circuit.num_levels, num_levels, atol=1e-10)
 
 
 @pytest.mark.parametrize(
