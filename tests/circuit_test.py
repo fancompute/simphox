@@ -4,7 +4,7 @@ import pytest
 from scipy.stats import unitary_group
 from itertools import product, zip_longest
 
-from simphox.circuit import configure_vector, configure_unitary, CouplingNode, CouplingCircuit, tree, random_complex
+from simphox.circuit import configure_vector, configure_unitary, CouplingNode, ForwardCouplingCircuit, tree, random_complex
 
 np.random.seed(0)
 

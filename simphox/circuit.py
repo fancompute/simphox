@@ -1,10 +1,12 @@
 from collections import defaultdict
+from enum import Enum
 
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 import scipy as sp
 import xarray as xr
+
 try:
     DPHOX_IMPORTED = True
     from dphox.device import Device
@@ -19,7 +21,7 @@ from .typing import Callable, Iterable, List, Optional, Size, Union
 from .utils import fix_dataclass_init_docs
 
 
-def phase_matrix(bottom: float, top: float = 0):
+def phase_matrix(top: float, bottom: float = 0):
     return np.array([
         [np.exp(1j * top), 0],
         [0, np.exp(1j * bottom)]
@@ -43,12 +45,30 @@ def coupling_matrix_phase(theta: float, split_error: float = 0, loss_error: floa
 def _embed_2x2(mat: np.ndarray, n: int, i: int, j: int):
     if mat.shape != (2, 2):
         raise AttributeError(f"Expected shape (2, 2), but got {mat.shape}.")
-    out = np.eye(n)
+    out = np.eye(n, dtype=np.complex128)
     out[i, i] = mat[0, 0]
     out[i, j] = mat[0, 1]
     out[j, i] = mat[1, 0]
     out[j, j] = mat[1, 1]
     return out
+
+
+class PhaseStyle(str, Enum):
+    """Enumeration for the different phase styles (differential, common, top, bottom).
+
+    A phase style is defined as
+
+    Attributes:
+        TOP: Top phase shift
+        BOTTOM: Bottom phase shift
+        DIFFERENTIAL: Differential phase shift
+        COMMON: Common phase shift
+
+    """
+    TOP = 'top'
+    BOTTOM = 'bottom'
+    DIFFERENTIAL = 'differential'
+    SYMMETRIC = 'symmetric'
 
 
 @fix_dataclass_init_docs
@@ -59,10 +79,10 @@ class CouplingNode:
     Attributes:
         node_id: The index of the coupling node (useful in networks).
         loss: The loss of the overall coupling node.
-        error: The total error in the coupling node.
+        error: The splitting error of the coupling node (MZI coupling errors).
         n: Total number of inputs/outputs.
-        i: Top input/output index.
-        j: Bottom input/output index.
+        top: Top input/output index.
+        bottom: Bottom input/output index.
         num_top: Total number of inputs connected to top port (for tree architectures initialization).
         num_bottom: Total number of inputs connected to bottom port (for tree architecture initialization).
         level: The level label assigned to the node
@@ -71,6 +91,7 @@ class CouplingNode:
     node_id: int = 0
     loss: float = 0
     error: float = 0
+    error_right: float = 0
     n: int = 2
     top: int = 0
     bottom: int = 1
@@ -92,8 +113,8 @@ class CouplingNode:
         mat = phase_matrix(phi) @ coupling_matrix_s(s)
         return _embed_2x2(mat, self.n, self.top, self.bottom)
 
-    def mmi_node_matrix(self, theta: float = 0, phi: float = 0):
-        """Tunable multimode interferometer node matrix.
+    def mzi_node_matrix(self, theta: float = 0, phi: float = 0):
+        """Tunable Mach-Zehnder interferometer node matrix.
 
         Args:
             theta: MMI phase between odd/even modes :math:`\\theta \\in [0, \\pi]` (:math:`\\theta=0` means cross state).
@@ -103,23 +124,26 @@ class CouplingNode:
             Tunable MMI node matrix embedded in an :math:`N`-waveguide system.
 
         """
-        mat = self.loss * phase_matrix(phi) @ self.dc @ phase_matrix(theta + self.error) @ self.dc
+        mat = (1 - self.loss) * self.dc(right=True) @ phase_matrix(theta) @ self.dc(right=False) @ phase_matrix(phi)
         return _embed_2x2(mat, self.n, self.top, self.bottom)
 
-    @property
-    def dc(self) -> np.ndarray:
-        """
+    def dc(self, right: bool = False) -> np.ndarray:
+        """Directional coupler matrix with error.
+
+        Args:
+            right: Whether toi use the left or right error (:code:`error` and :code:`error_right` respectively).
 
         Returns:
             A directional coupler matrix with error.
 
         """
-        return jnp.array([
-            [jnp.cos(np.pi / 4 + self.error), 1j * jnp.sin(np.pi / 4 + self.error)],
-            [1j * jnp.sin(np.pi / 4 + self.error), jnp.cos(np.pi / 4 + self.error)]
+        error = (self.error, self.error_right)[right]
+        return np.array([
+            [np.cos(np.pi / 4 + error), 1j * np.sin(np.pi / 4 + error)],
+            [1j * np.sin(np.pi / 4 + error), np.cos(np.pi / 4 + error)]
         ])
 
-    def mzi_node_matrix(self, theta: float = 0, phi: float = 0):
+    def mmi_node_matrix(self, theta: float = 0, phi: float = 0):
         """Tunable multimode interferometer node matrix.
 
         Args:
@@ -130,14 +154,14 @@ class CouplingNode:
             Tunable MMI node matrix embedded in an :math:`N`-waveguide system.
 
         """
-        mat = phase_matrix(phi) @ coupling_matrix_phase(theta, self.error, self.loss)
+        mat = (1 - self.loss) * coupling_matrix_phase(theta, self.error, self.loss) @ phase_matrix(phi)
         return _embed_2x2(mat, self.n, self.top, self.bottom)
 
 
 @fix_dataclass_init_docs
 @dataclass
-class CouplingCircuit:
-    """A coupling circuit class is just a list of coupling nodes that interact arbitrary waveguide pairs.
+class ForwardCouplingCircuit:
+    """A coupling circuit class is a feedforward coupling nodes that interact arbitrary waveguide pairs.
 
     The :code:`CouplingCircuit` has the convenient property that it is acyclic, so this means that we can simply
     use a list of nodes defined in time-order traversal to define the entire circuit. This greatly simplifies
@@ -152,12 +176,13 @@ class CouplingCircuit:
     def __post_init_post_parse__(self):
         self.top = tuple([int(node.top) for node in self.nodes])
         self.bottom = tuple([int(node.bottom) for node in self.nodes])
-        self.errors = np.array([node.error for node in self.nodes])
+        self.errors_left = np.array([node.error for node in self.nodes])
+        self.errors_right = np.array([node.error_right for node in self.nodes])
         self.mzi_terms = np.array(
-            [np.cos(np.pi / 4 + self.errors) * np.cos(np.pi / 4 + self.errors),
-             np.cos(np.pi / 4 + self.errors) * np.sin(np.pi / 4 + self.errors),
-             np.sin(np.pi / 4 + self.errors) * np.cos(np.pi / 4 + self.errors),
-             np.sin(np.pi / 4 + self.errors) * np.sin(np.pi / 4 + self.errors)]
+            [np.cos(np.pi / 4 + self.errors_right) * np.cos(np.pi / 4 + self.errors_left),
+             np.cos(np.pi / 4 + self.errors_right) * np.sin(np.pi / 4 + self.errors_left),
+             np.sin(np.pi / 4 + self.errors_right) * np.cos(np.pi / 4 + self.errors_left),
+             np.sin(np.pi / 4 + self.errors_right) * np.sin(np.pi / 4 + self.errors_left)]
         )
         self.losses = np.array([node.loss for node in self.nodes])
         self.node_idxs = tuple([node.node_id for node in self.nodes])
@@ -231,7 +256,7 @@ class CouplingCircuit:
         return 2 * np.arccos(np.sqrt(self.rand_s()))
 
     @classmethod
-    def aggregate(cls, nodes_or_node_lists: List[Union[CouplingNode, "CouplingCircuit"]]):
+    def aggregate(cls, nodes_or_node_lists: List[Union[CouplingNode, "ForwardCouplingCircuit"]]):
         """Aggregate nodes and/or node lists into a single :code:`NodeList`.
 
         Args:
@@ -264,9 +289,63 @@ class CouplingCircuit:
         nodes_by_level = defaultdict(list)
         for node in self.nodes:
             nodes_by_level[node.level].append(node)
-        return [CouplingCircuit(nodes_by_level[level]) for level in range(self.num_levels)]
+        return [ForwardCouplingCircuit(nodes_by_level[level]) for level in range(self.num_levels)]
 
-    def matrix_fn(self, use_jax: bool = True):
+    def parallel_mzi_fn(self, phase_style: str = PhaseStyle.TOP, use_jax: bool = False):
+        """This is a helper function for finding the matrix elements for MZIs in parallel,
+        leading to significant speedup.
+
+        Args:
+            phase_style: The phase style to use for the parallel MZIs.
+            use_jax: Whether to use jax.
+
+        Returns:
+            A function that accepts the thetas and phis as inputs and outputs the vectorized
+            MZI matrix elements
+
+        """
+
+        xp = jnp if use_jax else np
+
+        # stands for cos-cos, cos-sin, sin-cos, sin-sin terms.
+        cc, cs, sc, ss = self.mzi_terms
+
+        # insertion (assume a fixed loss that is global for each node)
+        insertion = 1 - self.losses
+
+        if phase_style == PhaseStyle.TOP:
+            def parallel_mzi(theta, phi):
+                t11 = (-cc + ss * xp.exp(1j * theta)) * xp.exp(1j * phi)
+                t12 = 1j * (cs + sc * xp.exp(1j * theta)) * xp.exp(1j * phi)
+                t21 = 1j * (sc + cs * xp.exp(1j * theta))
+                t22 = (ss - cc * xp.exp(1j * theta))
+                return insertion * xp.array([t11, t12, t21, t22])
+        elif phase_style == PhaseStyle.BOTTOM:
+            def parallel_mzi(theta, phi):
+                t11 = (-cc * xp.exp(1j * theta) + ss)
+                t12 = 1j * (cs * xp.exp(1j * theta) + sc)
+                t21 = 1j * (sc * xp.exp(1j * theta) + cs) * xp.exp(1j * phi)
+                t22 = (ss * xp.exp(1j * theta) - cc) * xp.exp(1j * phi)
+                return insertion * xp.array([t11, t12, t21, t22])
+        elif phase_style == PhaseStyle.SYMMETRIC:
+            def parallel_mzi(theta, phi):
+                t11 = (-cc + ss * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta / 2))
+                t12 = 1j * (cs + sc * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta / 2))
+                t21 = 1j * (sc + cs * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta / 2))
+                t22 = (ss - cc * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta / 2))
+                return insertion * xp.array([t11, t12, t21, t22])
+        elif phase_style == PhaseStyle.DIFFERENTIAL:
+            def parallel_mzi(theta, phi):
+                t11 = (-cc + ss * xp.exp(1j * theta)) * xp.exp(1j * (-phi - theta) / 2)
+                t12 = 1j * (cs + sc * xp.exp(1j * theta)) * xp.exp(1j * (-phi - theta) / 2)
+                t21 = 1j * (sc + cs * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta) / 2)
+                t22 = (ss - cc * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta) / 2)
+                return insertion * xp.array([t11, t12, t21, t22])
+        else:
+            raise ValueError(f"Phase style {phase_style} is not valid.")
+        return parallel_mzi
+
+    def matrix_fn(self, phase_style: str = PhaseStyle.TOP, use_jax: bool = False):
         """Return a function that returns the matrix representation of this circuit.
 
         The coupling circuit is a photonic network aligned with :math:`N` waveguide rails.
@@ -279,6 +358,7 @@ class CouplingCircuit:
         We also go level-by-level to significantly improve the efficiency of the matrix multiplications.
 
         Args:
+            phase_style: The phase style for each node in the network.
             use_jax: Use JAX to accelerate the matrix function.
 
         Returns:
@@ -289,31 +369,37 @@ class CouplingCircuit:
         """
 
         node_levels = self.levels
+        level_fns = [level.parallel_mzi_fn(phase_style, use_jax) for level in node_levels]
         xp = jnp if use_jax else np
         identity = xp.eye(node_levels[0].n, dtype=xp.complex128)
 
         # Define a function that represents an mzi level given inputs and all available thetas and phis
         def matrix(thetas: xp.ndarray, phis: xp.ndarray, gammas: xp.ndarray):
             outputs = identity
-            for nc in node_levels:
+            for nc, level_fn in zip(node_levels, level_fns):
+                # collect the inputs to be interfered
                 top = outputs[(nc.top,)]
                 bottom = outputs[(nc.bottom,)]
+
+                # collect the thetas and phis from all MZIs in a given column
                 theta = thetas[(nc.node_idxs,)]
                 phi = phis[(nc.node_idxs,)]
-                cc, cs, sc, ss = nc.mzi_terms
-                loss = nc.losses
-                top_from_top = ((1 - loss) * (cc - ss * xp.exp(1j * theta)))[:, xp.newaxis]
-                bottom_from_top = (1j * (1 - loss) * (sc + cs * xp.exp(1j * theta)))[:, xp.newaxis]
-                top_from_bottom = (1j * (1 - loss) * (cs + sc * xp.exp(1j * theta)) * xp.exp(1j * phi))[:, xp.newaxis]
-                bottom_from_bottom = ((1 - loss) * (-ss + cc * xp.exp(1j * theta)) * xp.exp(1j * phi))[:, xp.newaxis]
+
+                # collect the matrix elements to be applied in parallel to the incoming modes.
+                t11, t12, t21, t22 = level_fn(theta, phi)
+                t11, t12, t21, t22 = t11[:, xp.newaxis], t12[:, xp.newaxis], t21[:, xp.newaxis], t22[:, xp.newaxis]
+
+                # use jax or use numpy affects the syntax for assigning the outputs to the new outputs after the layer
                 if use_jax:
                     outputs = outputs.at[(nc.top + nc.bottom,)].set(
-                        xp.vstack([top_from_top * top + top_from_bottom * bottom,
-                                   bottom_from_top * top + bottom_from_bottom * bottom])
+                        xp.vstack([t11 * top + t21 * bottom,
+                                   t12 * top + t22 * bottom])
                     )
                 else:
-                    outputs[(nc.top + nc.bottom,)] = xp.vstack([top_from_top * top + top_from_bottom * bottom,
-                                                                bottom_from_top * top + bottom_from_bottom * bottom])
+                    outputs[(nc.top + nc.bottom,)] = xp.vstack([t11 * top + t21 * bottom,
+                                                                t12 * top + t22 * bottom])
+
+            # multiply the gamma phases present at the end of the network (sets the reference phase front).
             return (xp.exp(1j * gammas) * outputs.T).T
 
         return matrix
@@ -368,8 +454,8 @@ def _tree(indices: np.ndarray, n_rails: int, start: int = 0, level: int = 0,
     return nodes
 
 
-def tree(n: int, n_rails: Optional[int] = None, balanced: bool = True) -> CouplingCircuit:
-    """Return a balanced tree of MZIs.
+def tree(n: int, n_rails: Optional[int] = None, balanced: bool = True) -> ForwardCouplingCircuit:
+    """Return a balanced or linear chain tree of MZIs.
 
     Args:
         n: Number of inputs into the tree.
@@ -381,16 +467,17 @@ def tree(n: int, n_rails: Optional[int] = None, balanced: bool = True) -> Coupli
 
     """
     n_rails = n if n_rails is None else n_rails
-    return CouplingCircuit(_tree(np.arange(n - 1), n_rails, balanced=balanced)).invert_levels()
+    return ForwardCouplingCircuit(_tree(np.arange(n - 1), n_rails, balanced=balanced)).invert_levels()
 
 
-def configure_vector(v: np.ndarray, n_rails: int = None, balanced: bool = True):
+def configure_vector(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase_style: str = PhaseStyle.TOP):
     """Generate an architecture based on our recursive definitions programmed to implement normalized vector :code:`v`.
 
     Args:
         v: The vector to be configured, if a matrix is provided
         n_rails: Embed the first :code:`n` rails in an :code:`n_rails`-rail system (default :code:`n_rails == n`).
         balanced: If balanced, does balanced tree (:code:`m = n // 2`) otherwise linear chain (:code:`m = n - 1`).
+        phase_style: Phase style for the nodes (see the :code:`PhaseStyle` enum).
 
     Returns:
         Coupling network, thetas and phis that initialize the coupling network to implement normalized v.
@@ -401,25 +488,27 @@ def configure_vector(v: np.ndarray, n_rails: int = None, balanced: bool = True):
     w = v.copy()
     w = w[:, np.newaxis] if w.ndim == 1 else w
     for nc in network.levels:
+        # grab the elements for the top and bottom arms of the mzi.
         top = w[(nc.top,)]
         bottom = w[(nc.bottom,)]
 
         # vectorized nullification
-        theta = np.arctan2(np.abs(bottom[:, -1]), np.abs(top[:, -1])) * 2
-        phi = np.angle(top[:, -1]) - np.angle(bottom[:, -1])
+        if phase_style == PhaseStyle.SYMMETRIC:
+            raise NotImplementedError('Require phase_style not be of the SYMMETRIC variety.')
+        elif phase_style == PhaseStyle.BOTTOM:
+            theta = np.arctan2(np.abs(bottom[:, -1]), np.abs(top[:, -1])) * 2
+            phi = np.angle(top[:, -1]) - np.angle(bottom[:, -1])
+        else:
+            theta = -np.arctan2(np.abs(bottom[:, -1]), np.abs(top[:, -1])) * 2
+            phi = np.angle(bottom[:, -1]) - np.angle(top[:, -1])
 
-        # mzi terms (these should all be 0.5)
-        cc, cs, sc, ss = nc.mzi_terms
-
-        # the vectorized form of simultaneously-acting MZIs / nodes
-        top_from_top = ((cc - ss * np.exp(1j * theta)))[:, np.newaxis]
-        bottom_from_top = (1j * (sc + cs * np.exp(1j * theta)))[:, np.newaxis]
-        top_from_bottom = (1j * (cs + sc * np.exp(1j * theta)) * np.exp(1j * phi))[:, np.newaxis]
-        bottom_from_bottom = ((-ss + cc * np.exp(1j * theta)) * np.exp(1j * phi))[:, np.newaxis]
+        # vectorized parallel mzi elements used to compute the
+        t11, t12, t21, t22 = nc.parallel_mzi_fn(phase_style=phase_style)(theta, phi)
+        t11, t12, t21, t22 = t11[:, np.newaxis], t12[:, np.newaxis], t21[:, np.newaxis], t22[:, np.newaxis]
 
         # the final vector after the vectorized multiply
-        w[(nc.top + nc.bottom,)] = np.vstack([top_from_top * top + top_from_bottom * bottom,
-                                              bottom_from_top * top + bottom_from_bottom * bottom])
+        w[(nc.top + nc.bottom,)] = np.vstack([t11 * top + t21 * bottom,
+                                              t12 * top + t22 * bottom])
 
         # the resulting thetas and phis, indexed according to the coupling network specifications
         thetas[(nc.node_idxs,)] = theta
@@ -430,13 +519,13 @@ def configure_vector(v: np.ndarray, n_rails: int = None, balanced: bool = True):
     return network, thetas, phis, gammas, w.squeeze()
 
 
-def configure_unitary(u: np.ndarray, k: int = None, balanced: bool = True):
+def configure_unitary(u: np.ndarray, balanced: bool = True, phase_style: str = PhaseStyle.TOP):
     """Generate an architecture based on our recursive definitions programmed to implement unitary :code:`u`.
 
     Args:
-        u: The unitary matrix to be configured.
-        k: The number of basis vectors we care about (useful for SVD architectures, not yet implemented).
+        u: The (:math:`k \\times n`) mutually orthogonal basis vectors (unitary if :math:`k=n`) to be configured.
         balanced: If balanced, does balanced tree (:code:`m = n // 2`) otherwise linear chain (:code:`m = n - 1`).
+        phase_style: Phase style for the nodes (see the :code:`PhaseStyle` enum).
 
     Returns:
         Node list, thetas and phis.
@@ -451,9 +540,9 @@ def configure_unitary(u: np.ndarray, k: int = None, balanced: bool = True):
     num_nodes = 0
 
     w = u.copy()
-    for i in reversed(range(1, n_rails)):
+    for i in reversed(range(n_rails + 1 - u.shape[1], n_rails)):
         # Generate the architecture as well as the theta and phi for each row of u.
-        nodes, theta, phi, gamma, w = configure_vector(w[:i + 1, :i + 1], n_rails, balanced)
+        nodes, theta, phi, gamma, w = configure_vector(w[:i + 1, :i + 1], n_rails, balanced, phase_style)
 
         # Update the phases.
         thetas = np.hstack((thetas, theta))
@@ -472,7 +561,128 @@ def configure_unitary(u: np.ndarray, k: int = None, balanced: bool = True):
         num_levels += subunits[-1].num_levels
         num_nodes += subunits[-1].num_nodes
     gammas = np.hstack((-np.angle(w[0, 0]), gammas))
-    return CouplingCircuit.aggregate(subunits), thetas, phis, gammas
+    return ForwardCouplingCircuit.aggregate(subunits), thetas, phis, gammas
+
+
+def checkerboard_to_param(checkerboard: np.ndarray, units: int):
+    param = np.zeros((units, units // 2))
+    if units % 2:
+        param[::2, :] = checkerboard.T[::2, :-1:2]
+    else:
+        param[::2, :] = checkerboard.T[::2, ::2]
+    param[1::2, :] = checkerboard.T[1::2, 1::2]
+    return param
+
+
+def grid_common_mode_flow(external_phases: np.ndarray, gamma: np.ndarray):
+    """In a grid mesh (e.g., triangular, rectangular meshes), phases may need to be re-arranged.
+     This is achieved using a procedure called "common mode flow" where common modes are shifted
+     throughout the mesh until phases are correctly set.
+
+    Args:
+        external_phases: external phases in the grid mesh
+        gamma: input phase shifts
+
+    Returns:
+        new external phases shifts and new gamma resulting
+
+    """
+    units, num_layers = external_phases.shape
+    phase_shifts = np.hstack((external_phases, gamma[:, np.newaxis])).T
+    new_phase_shifts = np.zeros_like(external_phases.T)
+
+    for i in range(num_layers):
+        current_layer = i
+        start_idx = current_layer % 2
+        end_idx = units - (current_layer + units) % 2
+
+        # calculate upper and lower phases
+        upper_phase = phase_shifts[current_layer][start_idx:end_idx][::2]
+        lower_phase = phase_shifts[current_layer][start_idx:end_idx][1::2]
+        upper_phase = np.mod(upper_phase, 2 * np.pi)
+        lower_phase = np.mod(lower_phase, 2 * np.pi)
+
+        # upper - lower
+        new_phase_shifts[i][start_idx:end_idx][::2] = upper_phase - lower_phase
+
+        # lower_phase is now the common mode for all phase shifts in this layer
+        phase_shifts[current_layer] -= new_phase_shifts[i]
+
+        # shift the phases to the next layer in parallel
+        phase_shifts[current_layer + 1] += np.mod(phase_shifts[current_layer], 2 * np.pi)
+
+        # set the current layer's phase to 0 (changing to new phase shifts)
+        phase_shifts[current_layer] = 0
+    new_gamma = np.mod(phase_shifts[-1], 2 * np.pi)
+    return np.mod(new_phase_shifts.T, 2 * np.pi), new_gamma
+
+
+def rectangular(u: np.ndarray, pbar: Callable = None):
+    """Get a rectangular architecture for the unitary matrix :code:`u` using the Clements decomposition.
+
+    Args:
+        u: The unitary matrix
+        pbar: The progress bar for the clements decomposition (useful for larger unitaries)
+
+    Returns:
+
+    """
+    u_hat = u.copy()
+    n = u.shape[0]
+    # odd and even layer dimensions
+    theta_checkerboard = np.zeros_like(u, dtype=np.float64)
+    phi_checkerboard = np.zeros_like(u, dtype=np.float64)
+    phi_checkerboard = np.hstack((np.zeros((n, 1)), phi_checkerboard))
+    iterator = pbar(range(n - 1)) if pbar else range(n - 1)
+    for i in iterator:
+        if i % 2:
+            for j in range(i + 1):
+                pairwise_index = n + j - i - 2
+                target_row, target_col = n + j - i - 1, j
+                theta = np.arctan2(np.abs(u_hat[target_row - 1, target_col]), np.abs(u_hat[target_row, target_col])) * 2
+                phi = np.angle(u_hat[target_row, target_col]) - np.angle(u_hat[target_row - 1, target_col])
+                mzi = CouplingNode(n=n, top=pairwise_index, bottom=pairwise_index + 1)
+                left_multiplier = mzi.mzi_node_matrix(theta, phi)
+                u_hat = left_multiplier @ u_hat
+                theta_checkerboard[pairwise_index, j] = theta
+                phi_checkerboard[pairwise_index, j] = phi
+        else:
+            for j in range(i + 1):
+                pairwise_index = i - j
+                target_row, target_col = n - j - 1, i - j
+                theta = np.arctan2(np.abs(u_hat[target_row, target_col + 1]), np.abs(u_hat[target_row, target_col])) * 2
+                phi = np.angle(-u_hat[target_row, target_col]) - np.angle(u_hat[target_row, target_col + 1])
+                mzi = CouplingNode(n=n, top=pairwise_index, bottom=pairwise_index + 1)
+                right_multiplier = mzi.mzi_node_matrix(theta, phi)
+                u_hat = u_hat @ right_multiplier.conj().T
+                theta_checkerboard[pairwise_index, -j - 1] = theta
+                phi_checkerboard[pairwise_index, -j - 1] = phi
+
+    diag_phases = np.angle(np.diag(u_hat))
+    theta = checkerboard_to_param(np.fliplr(theta_checkerboard), n)
+    phi_checkerboard = np.fliplr(phi_checkerboard)
+    if n % 2:
+        phi_checkerboard[:, :-1] += np.fliplr(np.diag(diag_phases))
+    else:
+        phi_checkerboard[:, 1:] += np.fliplr(np.diag(diag_phases))
+
+    phi, gamma = grid_common_mode_flow(external_phases=phi_checkerboard[:, :-1],
+                                       gamma=phi_checkerboard[:, -1])
+    phi = checkerboard_to_param(phi, n)
+
+    nodes = []
+    thetas = np.array([])
+    phis = np.array([])
+    node_id = 0
+    for i in range(n):
+        num_to_interfere = theta.shape[1] - (i % 2) * (1 - n % 2)
+        nodes += [CouplingNode(node_id=node_id + j, n=n, top=2 * j + i % 2, bottom=2 * j + 1 + i % 2, level=i)
+                  for j in range(num_to_interfere)]
+        thetas = np.hstack([thetas, theta[i, :num_to_interfere]])
+        phis = np.hstack([phis, phi[i, :num_to_interfere]])
+        node_id += num_to_interfere
+
+    return ForwardCouplingCircuit(nodes), thetas, phis, gamma
 
 
 def dirichlet_matrix(v, embed_dim=None):
@@ -585,7 +795,8 @@ class Component:
         self.name = name
 
     @classmethod
-    def from_fdfd(cls, pattern: "Pattern", core_eps: float, clad_eps: float, spacing: float, wavelengths: Iterable[float],
+    def from_fdfd(cls, pattern: "Pattern", core_eps: float, clad_eps: float, spacing: float,
+                  wavelengths: Iterable[float],
                   boundary: Size, pml: float, name: str, in_ports: Optional[List[str]] = None,
                   out_ports: Optional[List[str]] = None, component_t: float = 0, component_zmin: Optional[float] = None,
                   rib_t: float = 0, sub_z: float = 0, height: float = 0, bg_eps: float = 1,

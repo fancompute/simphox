@@ -208,8 +208,8 @@ class ModeSolver(YeeGrid):
             h = eigvecs
 
         h = h.T
-        max_idx = np.argmax(np.abs(h), axis=0)
-        return np.sqrt(eigvals[useful_modes].real), h * np.exp(-1j * np.angle(h[:, max_idx]))
+        # max_phase_ref = np.array([h[i, idx] for i, idx in enumerate(np.argmax(np.abs(h), axis=1))])[:, np.newaxis]
+        return np.sqrt(eigvals[useful_modes].real), h * np.exp(-1j * np.angle(h[:, :1]))
 
     def dispersion_sweep(self, wavelengths: np.ndarray, m: int = 6, pbar: Callable = None):
         """Dispersion sweep for cross sectional modes
