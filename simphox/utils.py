@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.sparse as sp
-import dataclasses
+from pydantic.dataclasses import dataclass
 import jax.numpy as jnp
 
 from typing import Tuple, Union, Optional
@@ -29,7 +29,7 @@ def fix_dataclass_init_docs(cls):
 
 
 @fix_dataclass_init_docs
-@dataclasses.dataclass
+@dataclass
 class Material:
     """Helper class for materials.
 
@@ -39,7 +39,7 @@ class Material:
         facecolor: Facecolor in red-green-blue (RGB) for drawings (default is black or :code:`(0, 0, 0)`).
     """
     name: str
-    eps: float = 1
+    eps: float = 1.
     facecolor: Size3 = (0, 0, 0)
 
     def __str__(self):
@@ -51,9 +51,9 @@ POLYSILICON = Material('Poly-Si', 3.4784 ** 2, (0.5, 0.5, 0.5))
 AIR = Material('Air')
 OXIDE = Material('Oxide', 1.4442 ** 2, (0.6, 0, 0))
 NITRIDE = Material('Nitride', 1.996 ** 2, (0, 0, 0.7))
-LS_NITRIDE = Material('Low-Stress Nitride', (0, 0.4, 1))
+LS_NITRIDE = Material('Low-Stress Nitride', facecolor=(0, 0.4, 1))
 LT_OXIDE = Material('Low-Temp Oxide', 1.4442 ** 2, (0.8, 0.2, 0.2))
-ALUMINUM = Material('Aluminum', (0, 0.5, 0))
+ALUMINUM = Material('Aluminum', facecolor=(0, 0.5, 0))
 ALUMINA = Material('Alumina', 1.75, (0.2, 0, 0.2))
 ETCH = Material('Etch')
 
@@ -63,7 +63,7 @@ TEST_INF = Material('Inf', 1e10, (0, 0, 0))
 
 
 @fix_dataclass_init_docs
-@dataclasses.dataclass
+@dataclass
 class Box:
     """Helper class for quickly generating functions for design region placements.
 
@@ -78,7 +78,7 @@ class Box:
     material: Optional[Material] = None
     min: Size2 = (0., 0.)
 
-    def __post_init__(self):
+    def __post_init_post_parse__(self):
         self.size = (self.size, 0) if isinstance(self.size, float) else self.size
         self.eps = self.material.eps if self.material is not None else None
 
@@ -220,3 +220,18 @@ def splitter_metrics(sparams: xr.DataArray):
         'upper': powers.loc["b0"],
         'lower': powers.loc["b1"],
     }
+
+
+def random_complex(n: int, normed: bool = False) -> np.ndarray:
+    """Generate a random complex normal vector.
+
+    Args:
+        n: Number of inputs.
+        normed: Whether to norm the random complex vector so that the norm of the vector is 1.
+
+    Returns:
+        The random complex normal vector.
+
+    """
+    z = np.array(0.5 * np.random.randn(n) + 0.5 * np.random.randn(n) * 1j)
+    return z / np.linalg.norm(z) if normed else z

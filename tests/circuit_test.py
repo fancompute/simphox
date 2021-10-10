@@ -1,10 +1,12 @@
-import numpy as np
-import jax.numpy as jnp
-import pytest
-from scipy.stats import unitary_group
 from itertools import product, zip_longest
 
-from simphox.circuit import configure_vector, configure_unitary, CouplingNode, ForwardCouplingCircuit, tree, random_complex
+import numpy as np
+import pytest
+from scipy.stats import unitary_group
+
+from simphox.circuit import unitary_unit, vector_unit
+from simphox.circuit.cascade import tree
+from simphox.utils import random_complex
 
 np.random.seed(0)
 
@@ -40,7 +42,7 @@ def test_tree_network(n: int, balanced: bool, expected_node_idxs: np.ndarray, ex
     product(RAND_VECS, [True, False])
 )
 def test_vector_configure(v: np.ndarray, balanced: bool):
-    circuit, thetas, phis, gammas, _ = configure_vector(v, balanced=balanced)
+    circuit, thetas, phis, gammas, _ = vector_unit(v, balanced=balanced)
     res = circuit.matrix_fn(use_jax=False)(thetas, phis, gammas) @ v
     np.testing.assert_allclose(res, np.eye(v.size)[v.size - 1], atol=1e-10)
 
@@ -50,7 +52,7 @@ def test_vector_configure(v: np.ndarray, balanced: bool):
     product(RAND_UNITARIES, [True, False])
 )
 def test_unitary_configure(u: np.ndarray, balanced: bool):
-    circuit, thetas, phis, gammas = configure_unitary(u, balanced=balanced)
+    circuit, thetas, phis, gammas = unitary_unit(u, balanced=balanced)
     res = circuit.matrix_fn(use_jax=False)(thetas, phis, gammas)
     np.testing.assert_allclose(res, u.T.conj(), atol=1e-10)
 
@@ -60,7 +62,7 @@ def test_unitary_configure(u: np.ndarray, balanced: bool):
     zip_longest(RAND_UNITARIES, [2 * n - 3 for n in N])
 )
 def test_triangular_columns(u: np.ndarray, num_levels: int):
-    circuit, _, _, _ = configure_unitary(u, balanced=False)
+    circuit, _, _, _ = unitary_unit(u, balanced=False)
     np.testing.assert_allclose(circuit.num_levels, num_levels, atol=1e-10)
 
 
@@ -69,7 +71,7 @@ def test_triangular_columns(u: np.ndarray, num_levels: int):
     zip_longest(RAND_UNITARIES, [1, 5, 14, 25, 45, 49])
 )
 def test_cascade_columns(u: np.ndarray, num_levels: int):
-    circuit, _, _, _ = configure_unitary(u, balanced=True)
+    circuit, _, _, _ = unitary_unit(u, balanced=True)
     np.testing.assert_allclose(circuit.num_levels, num_levels, atol=1e-10)
 
 
@@ -78,7 +80,7 @@ def test_cascade_columns(u: np.ndarray, num_levels: int):
     product(RAND_UNITARIES, [True, False])
 )
 def test_unitary_configure(u: np.ndarray, balanced: bool):
-    circuit, thetas, phis, gammas = configure_unitary(u, balanced=balanced)
+    circuit, thetas, phis, gammas = unitary_unit(u, balanced=balanced)
     res = circuit.matrix_fn(use_jax=False)(thetas, phis, gammas)
     np.testing.assert_allclose(res, u.T.conj(), atol=1e-10)
 
