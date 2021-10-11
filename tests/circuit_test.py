@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from scipy.stats import unitary_group
 
-from simphox.circuit import unitary_unit, vector_unit
+from simphox.circuit import unitary_unit, vector_unit, rectangular
 from simphox.circuit.cascade import tree
 from simphox.utils import random_complex
 
@@ -54,7 +54,7 @@ def test_vector_configure(v: np.ndarray, balanced: bool):
 def test_unitary_configure(u: np.ndarray, balanced: bool):
     circuit, thetas, phis, gammas = unitary_unit(u, balanced=balanced)
     res = circuit.matrix_fn(use_jax=False)(thetas, phis, gammas)
-    np.testing.assert_allclose(res, u.T.conj(), atol=1e-10)
+    np.testing.assert_allclose(res, u, atol=1e-10)
 
 
 @pytest.mark.parametrize(
@@ -76,12 +76,9 @@ def test_cascade_columns(u: np.ndarray, num_levels: int):
 
 
 @pytest.mark.parametrize(
-    "u, balanced",
-    product(RAND_UNITARIES, [True, False])
+    "u", RAND_UNITARIES
 )
-def test_unitary_configure(u: np.ndarray, balanced: bool):
-    circuit, thetas, phis, gammas = unitary_unit(u, balanced=balanced)
+def test_rectangular(u: np.ndarray):
+    circuit, thetas, phis, gammas = rectangular(u)
     res = circuit.matrix_fn(use_jax=False)(thetas, phis, gammas)
-    np.testing.assert_allclose(res, u.T.conj(), atol=1e-10)
-
-
+    np.testing.assert_allclose(res, u, atol=1e-10)

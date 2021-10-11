@@ -132,7 +132,7 @@ def unitary_unit(u: np.ndarray, balanced: bool = True, phase_style: str = PhaseS
     num_levels = 0
     num_nodes = 0
 
-    w = u.copy()
+    w = u.conj().T.copy()
     for i in reversed(range(n_rails + 1 - u.shape[1], n_rails)):
         # Generate the architecture as well as the theta and phi for each row of u.
         nodes, theta, phi, gamma, w = vector_unit(w[:i + 1, :i + 1], n_rails, balanced, phase_style)

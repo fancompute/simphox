@@ -97,25 +97,39 @@ class CouplingNode:
         mat = phase_matrix(phi) @ coupling_matrix_s(s)
         return _embed_2x2(mat, self.n, self.top, self.bottom)
 
-    def mzi_node_matrix(self, theta: float = 0, phi: float = 0):
+    def mzi_node_matrix(self, theta: float = 0, phi: float = 0, embed: bool = True):
         """Tunable Mach-Zehnder interferometer node matrix.
 
         Args:
             theta: MMI phase between odd/even modes :math:`\\theta \\in [0, \\pi]` (:math:`\\theta=0` means cross state).
             phi: Differential phase :math:`\\phi \\in [0, 2\\pi)` (set phase between inputs to the node).
+            embed: Whether to return the embedded matrix in the n-waveguide system (specified in node).
 
         Returns:
             Tunable MMI node matrix embedded in an :math:`N`-waveguide system.
 
         """
         mat = (1 - self.loss) * self.dc(right=True) @ phase_matrix(theta) @ self.dc(right=False) @ phase_matrix(phi)
-        return _embed_2x2(mat, self.n, self.top, self.bottom)
+        return _embed_2x2(mat, self.n, self.top, self.bottom) if embed else mat
+
+    def phase_matrix(self, top: float = 0, bottom: float = 0):
+        """Embedded phase matrix.
+
+        Args:
+            top: Top phase of the phase matrix
+            bottom: Bottom phase of the phase matrix
+
+        Returns:
+            Embedded phase matrix.
+
+        """
+        return _embed_2x2(phase_matrix(top, bottom), self.n, self.top, self.bottom)
 
     def dc(self, right: bool = False) -> np.ndarray:
         """Directional coupler matrix with error.
 
         Args:
-            right: Whether toi use the left or right error (:code:`error` and :code:`error_right` respectively).
+            right: Whether to use the left or right error (:code:`error` and :code:`error_right` respectively).
 
         Returns:
             A directional coupler matrix with error.
@@ -127,16 +141,17 @@ class CouplingNode:
             [1j * np.sin(np.pi / 4 + error), np.cos(np.pi / 4 + error)]
         ])
 
-    def mmi_node_matrix(self, theta: float = 0, phi: float = 0):
+    def mmi_node_matrix(self, theta: float = 0, phi: float = 0, embed: bool = True):
         """Tunable multimode interferometer node matrix.
 
         Args:
             theta: MZI arm phase :math:`\\theta \\in [0, \\pi]` (:math:`\\theta=0` means cross state).
             phi: Differential phase :math:`\\phi \\in [0, 2\\pi)` (set phase between inputs to the node).
+            embed: Whether to return the embedded matrix in the n-waveguide system (specified in node).
 
         Returns:
             Tunable MMI node matrix embedded in an :math:`N`-waveguide system.
 
         """
         mat = (1 - self.loss) * coupling_matrix_phase(theta, self.error, self.loss) @ phase_matrix(phi)
-        return _embed_2x2(mat, self.n, self.top, self.bottom)
+        return _embed_2x2(mat, self.n, self.top, self.bottom) if embed else mat

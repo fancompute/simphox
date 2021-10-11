@@ -1,5 +1,4 @@
 import numpy as np
-import scipy as sp
 
 try:
     DPHOX_IMPORTED = True
@@ -24,6 +23,17 @@ def checkerboard_to_param(checkerboard: np.ndarray, units: int):
 
 
 def get_alpha_checkerboard(n: int):
+    """Get the sensitivity index for each of the nodes in a rectangular architecture.
+
+    The sensitivity values are arranged in a checkerboard form for easy spatial mapping to
+    coupling nodes in a rectangular architecture.
+
+    Args:
+        n: The number of inputs in the rectangular architecture
+
+    Returns:
+
+    """
     def rectangular_alpha(length: int, parity_odd: bool = False):
         odd_nums = list(length + 1 - np.flip(np.arange(1, length + 1, 2), axis=0))
         even_nums = list(length + 1 - np.arange(2, 2 * (length - len(odd_nums)) + 1, 2))
@@ -84,7 +94,9 @@ def grid_common_mode_flow(external_phases: np.ndarray, gamma: np.ndarray):
         phase_shifts[i + 1] += np.mod(phase_shifts[i], 2 * np.pi)
 
         # set the current layer's phase to 0 (changing to new phase shifts)
-        phase_shifts[i] = 0
+        # phase_shifts[i] = 0
+        # print(og_phase_shifts, phase_shifts[i])
+        # print(end_idx)
     new_gamma = np.mod(phase_shifts[-1], 2 * np.pi)
     return np.mod(new_phase_shifts.T, 2 * np.pi), new_gamma
 
@@ -113,35 +125,37 @@ def rectangular(u: np.ndarray, pbar: Callable = None):
                 target_row, target_col = n + j - i - 1, j
                 theta = np.arctan2(np.abs(u_hat[target_row - 1, target_col]), np.abs(u_hat[target_row, target_col])) * 2
                 phi = np.angle(u_hat[target_row, target_col]) - np.angle(u_hat[target_row - 1, target_col])
-                left = CouplingNode(n=n, top=pairwise_index, bottom=pairwise_index + 1).mzi_node_matrix(theta, phi)
-                u_hat = left @ u_hat
-                theta_checkerboard[pairwise_index, j] = theta
-                phi_checkerboard[pairwise_index, j] = -phi
+                left = CouplingNode(n=n, top=pairwise_index, bottom=pairwise_index + 1)
+                # Need an equivalent of differential internal phase shift to invert the matrix properly.
+                u_hat = left.phase_matrix(-theta / 2, -theta / 2) @ left.mzi_node_matrix(theta, phi) @ u_hat
+                theta_checkerboard[pairwise_index, -j - 1] = theta
+                phi_checkerboard[pairwise_index, -j - 1] = -phi - theta / 2 + np.pi
+                phi_checkerboard[pairwise_index + 1, -j - 1] = -theta / 2 + np.pi
         else:
             for j in range(i + 1):
                 pairwise_index = i - j
                 target_row, target_col = n - j - 1, i - j
                 theta = np.arctan2(np.abs(u_hat[target_row, target_col + 1]), np.abs(u_hat[target_row, target_col])) * 2
                 phi = np.angle(-u_hat[target_row, target_col]) - np.angle(u_hat[target_row, target_col + 1])
-                right = CouplingNode(n=n, top=pairwise_index, bottom=pairwise_index + 1).mzi_node_matrix(theta, phi)
-                u_hat = u_hat @ right.conj().T
-                theta_checkerboard[pairwise_index, -j - 1] = theta
-                phi_checkerboard[pairwise_index, -j - 1] = phi
+                right = CouplingNode(n=n, top=pairwise_index, bottom=pairwise_index + 1)
+                u_hat = u_hat @ right.mzi_node_matrix(theta, phi).conj().T
+                theta_checkerboard[pairwise_index, j] = theta
+                phi_checkerboard[pairwise_index, j] = phi
 
     diag_phases = np.angle(np.diag(u_hat))
-    theta = checkerboard_to_param(np.fliplr(theta_checkerboard), n)
-    phi_checkerboard = np.fliplr(phi_checkerboard)
+    theta = checkerboard_to_param(theta_checkerboard, n)
     alpha_checkerboard = get_alpha_checkerboard(n)
     if n % 2:
         phi_checkerboard[:, :-1] += np.fliplr(np.diag(diag_phases))
     else:
         phi_checkerboard[:, 1:] += np.fliplr(np.diag(diag_phases))
 
-    phi, gamma = grid_common_mode_flow(external_phases=phi_checkerboard[:, :-1],
-                                       gamma=phi_checkerboard[:, -1])
+    # Run the common mode flow algorithm to move phase front to the last layer of the mesh
+    phi, gamma = grid_common_mode_flow(external_phases=phi_checkerboard[:, :-1], gamma=phi_checkerboard[:, -1])
     phi = checkerboard_to_param(phi, n)
     alpha = checkerboard_to_param(alpha_checkerboard, n)
 
+    # Set up the rectangular mesh nodes
     nodes = []
     thetas = np.array([])
     phis = np.array([])
