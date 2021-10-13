@@ -6,13 +6,13 @@ from scipy.stats import unitary_group
 
 from simphox.circuit import unitary_unit, vector_unit, rectangular
 from simphox.circuit.cascade import tree
-from simphox.utils import random_complex
+from simphox.utils import random_vector
 
 np.random.seed(0)
 
 N = [2, 4, 7, 10, 15, 16]
 
-RAND_VECS = [random_complex(n, normed=True) for n in N]
+RAND_VECS = [random_vector(n, normed=True) for n in N]
 RAND_UNITARIES = [unitary_group.rvs(n) for n in N]
 
 
@@ -33,8 +33,8 @@ def test_tree_network(n: int, balanced: bool, expected_node_idxs: np.ndarray, ex
     circuit = tree(n, balanced=balanced)
     np.testing.assert_allclose(circuit.node_idxs, expected_node_idxs)
     np.testing.assert_allclose(circuit.num_levels, expected_num_levels)
-    np.testing.assert_allclose(circuit.num_top, expected_num_top)
-    np.testing.assert_allclose(circuit.num_bottom, expected_num_bottom)
+    np.testing.assert_allclose(circuit.alpha, expected_num_top)
+    np.testing.assert_allclose(circuit.beta, expected_num_bottom)
 
 
 @pytest.mark.parametrize(

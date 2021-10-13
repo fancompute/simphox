@@ -1,7 +1,11 @@
+import copy
 from collections import defaultdict
 from enum import Enum
+from typing import Tuple, Optional
 
 import jax.numpy as jnp
+from jax import value_and_grad, jit
+from jax.experimental.optimizers import adam
 import numpy as np
 import pandas as pd
 
@@ -15,7 +19,7 @@ from pydantic.dataclasses import dataclass
 from scipy.stats import beta
 
 from ..typing import List, Union
-from ..utils import fix_dataclass_init_docs
+from ..utils import fix_dataclass_init_docs, normalized_fidelity_fn
 from .coupling import CouplingNode, PhaseStyle
 
 
@@ -52,8 +56,8 @@ class ForwardCouplingCircuit:
         self.node_idxs = tuple([node.node_id for node in self.nodes])
         self.dataframe = pd.DataFrame([node.__dict__ for node in self.nodes])
         self.n = self.nodes[0].n if len(self.nodes) > 0 else 1
-        self.num_top = np.array([node.alpha for node in self.nodes])
-        self.num_bottom = np.array([node.beta for node in self.nodes])
+        self.alpha = np.array([node.alpha for node in self.nodes])
+        self.beta = np.array([node.beta for node in self.nodes])
         self.num_nodes = len(self.nodes)
         self.level_by_node = np.array([node.level for node in self.nodes])
         self.num_levels = np.max(self.level_by_node) + 1 if len(self.nodes) > 0 else 0
@@ -108,7 +112,7 @@ class ForwardCouplingCircuit:
             A randomly initialized :code:`s`.
 
         """
-        return beta.pdf(np.random.rand(self.num_nodes), self.num_top, self.num_bottom)
+        return beta.pdf(np.random.rand(self.num_nodes), self.alpha, self.beta)
 
     def rand_theta(self):
         """Randomly initialized coupling phase :math:`\\theta`.
@@ -223,7 +227,7 @@ class ForwardCouplingCircuit:
 
         Args:
             phase_style: The phase style for each node in the network.
-            use_jax: Use JAX to accelerate the matrix function.
+            use_jax: Use JAX to accelerate the matrix function for autodifferentiation purposes.
 
         Returns:
             Return the MZI level function that transforms the inputs (no explicit matrix defined here).
@@ -233,37 +237,124 @@ class ForwardCouplingCircuit:
         """
 
         node_levels = self.levels
-        level_fns = [level.parallel_mzi_fn(phase_style, use_jax) for level in node_levels]
+        level_ordered = self.level_ordered
+        node_fn = level_ordered.parallel_mzi_fn(phase_style, use_jax=True)
         xp = jnp if use_jax else np
         identity = xp.eye(node_levels[0].n, dtype=xp.complex128)
 
         # Define a function that represents an mzi level given inputs and all available thetas and phis
         def matrix(thetas: xp.ndarray, phis: xp.ndarray, gammas: xp.ndarray):
             outputs = identity
-            for nc, level_fn in zip(node_levels, level_fns):
+            # get the matrix elements for all nodes in parallel
+            t11, t12, t21, t22 = node_fn(thetas, phis)
+            for nc in node_levels:
                 # collect the inputs to be interfered
                 top = outputs[(nc.top,)]
                 bottom = outputs[(nc.bottom,)]
 
-                # collect the thetas and phis from all MZIs in a given column
-                theta = thetas[(nc.node_idxs,)]
-                phi = phis[(nc.node_idxs,)]
-
                 # collect the matrix elements to be applied in parallel to the incoming modes.
-                t11, t12, t21, t22 = level_fn(theta, phi)
-                t11, t12, t21, t22 = t11[:, xp.newaxis], t12[:, xp.newaxis], t21[:, xp.newaxis], t22[:, xp.newaxis]
+                # the new axis allows us to broadcast (apply same op) over the second output dimension
+                s11 = t11[(nc.node_idxs,)][:, xp.newaxis]
+                s12 = t12[(nc.node_idxs,)][:, xp.newaxis]
+                s21 = t21[(nc.node_idxs,)][:, xp.newaxis]
+                s22 = t22[(nc.node_idxs,)][:, xp.newaxis]
 
                 # use jax or use numpy affects the syntax for assigning the outputs to the new outputs after the layer
                 if use_jax:
                     outputs = outputs.at[(nc.top + nc.bottom,)].set(
-                        xp.vstack([t11 * top + t21 * bottom,
-                                   t12 * top + t22 * bottom])
+                        xp.vstack([s11 * top + s21 * bottom,
+                                   s12 * top + s22 * bottom])
                     )
                 else:
-                    outputs[(nc.top + nc.bottom,)] = xp.vstack([t11 * top + t21 * bottom,
-                                                                t12 * top + t22 * bottom])
+                    outputs[(nc.top + nc.bottom,)] = xp.vstack([s11 * top + s21 * bottom,
+                                                                s12 * top + s22 * bottom])
 
             # multiply the gamma phases present at the end of the network (sets the reference phase front).
             return (xp.exp(1j * gammas) * outputs.T).T
 
         return matrix
+
+    @property
+    def level_ordered(self):
+        """Level-ordered nodes for this circuit
+
+        Returns:
+            The level-ordered nodes for this circuit (useful in cases nodes are out of order).
+
+        """
+        return ForwardCouplingCircuit.aggregate(self.levels)
+
+    def add_error_mean(self, error: Union[float, np.ndarray] = 0,
+                       error_right: Optional[Union[float, np.ndarray]] = None,
+                       loss_db: Union[float, np.ndarray] = 0):
+        new_nodes = copy.deepcopy(self.nodes)
+        if error_right is None:
+            error_right = error
+        error = error * np.ones_like(self.errors_left) if isinstance(error, float) else error
+        error_right = error_right * np.ones_like(self.error_right) if isinstance(error_right, float) else error_right
+        loss_db = loss_db * np.ones_like(self.loss) if isinstance(loss_db, float) else loss_db
+        for node, e, er, loss in zip(new_nodes, error, error_right, loss_db):
+            node.error = e
+            node.error_right = er
+            node.loss = 1 - 10 ** (loss / 10)
+        return ForwardCouplingCircuit(new_nodes)
+
+    def add_error_variance(self, error_std: float, loss_db_std: float = 0, correlated_error: bool = True):
+        """
+
+        Args:
+            error_std:
+            loss_db_std:
+            correlated_error:
+
+        Returns:
+
+        """
+        new_nodes = copy.deepcopy(self.nodes)
+        error_std_left = error_std * np.random.randn(self.errors_left.size)
+        error_std_right = error_std * np.random.randn(self.errors_right.size) if not correlated_error else error_std_left
+        loss_std = loss_db_std * np.random.randn(self.losses.size)
+        loss_db = np.maximum(self.loss_db + loss_std, 0)
+        error = self.errors_left + error_std_left
+        error_right = self.errors_right + error_std_right
+        for node, e, er, loss in zip(new_nodes, error, error_right, loss_db):
+            node.error = e
+            node.error_right = er
+            node.loss = 1 - 10 ** (loss / 10)
+        return ForwardCouplingCircuit(new_nodes)
+
+    @property
+    def loss_db(self):
+        return 10 * np.log10(1 - self.losses)
+
+    def matrix_optimizer(self, uopt: np.ndarray, thetas: np.ndarray, phis: np.ndarray, gammas: np.ndarray,
+                         step_size: float = 0.1, use_jit: bool = False):
+        """Matrix optimizer.
+
+        Args:
+            uopt: Unitary matrix to optimize.
+            thetas: Initial thetas (internal phases).
+            phis: Initial phis (external phases).
+            gammas: Initial gammas (output phase front).
+            step_size: Step size for the optimizer.
+            use_jit: Whether to use JIT to compile the JAX function (faster to optimize, slower to compile!).
+
+        Returns:
+            A tuple of the initial state :code:`init` and the :code:`update_fn`.
+
+        """
+        fidelity = normalized_fidelity_fn(uopt, use_jax=True)
+        matrix_fn = self.matrix_fn(use_jax=True)
+        matrix_fn = jit(matrix_fn) if use_jit else matrix_fn
+
+        def cost_fn(params: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]):
+            return -fidelity(matrix_fn(*params))
+
+        opt_init, opt_update, get_params = adam(step_size=step_size)
+        init = opt_init((jnp.array(thetas), jnp.array(phis), jnp.array(gammas)))
+
+        def update_fn(i, state):
+            v, g = value_and_grad(cost_fn)(get_params(state))
+            return v, opt_update(i, g, state)
+
+        return init, update_fn

@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.stats import unitary_group
 import scipy.sparse as sp
 from pydantic.dataclasses import dataclass
 import jax.numpy as jnp
@@ -222,7 +223,7 @@ def splitter_metrics(sparams: xr.DataArray):
     }
 
 
-def random_complex(n: int, normed: bool = False) -> np.ndarray:
+def random_vector(n: int, normed: bool = False) -> np.ndarray:
     """Generate a random complex normal vector.
 
     Args:
@@ -235,3 +236,33 @@ def random_complex(n: int, normed: bool = False) -> np.ndarray:
     """
     z = np.array(0.5 * np.random.randn(n) + 0.5 * np.random.randn(n) * 1j)
     return z / np.linalg.norm(z) if normed else z
+
+
+def random_unitary(n: int) -> np.ndarray:
+    """Generate a random unitary matrix.
+
+    Args:
+        n: Number of inputs and outputs
+
+    Returns:
+        The random complex normal vector.
+
+    """
+    return unitary_group.rvs(n)
+
+
+def normalized_fidelity_fn(u: np.ndarray, use_jax: bool = False):
+    """Normalized fidelity cost function.
+
+    Args:
+        u: the true (target) unitary, :math:`U \\in \\mathrm{U}(N)`.
+
+    Returns:
+        A function that accepts :code:`uhat` the estimated unitary (not necessarily unitary), :math:`\\widehat{U}`
+        and returns the fidelity measurement.
+
+    """
+
+    xp = jnp if use_jax else np
+    u = jnp.array(u) if use_jax else u
+    return lambda uhat: xp.abs(xp.trace(u.conj().T @ uhat)) ** 2 / xp.abs(xp.trace(uhat.conj().T @ uhat)) ** 2

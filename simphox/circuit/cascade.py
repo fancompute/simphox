@@ -157,6 +157,14 @@ def unitary_unit(u: np.ndarray, balanced: bool = True, phase_style: str = PhaseS
     return ForwardCouplingCircuit.aggregate(subunits), thetas, phis, gammas
 
 
+def triangular(u: np.ndarray):
+    return unitary_unit(u, balanced=False)
+
+
+def tree_cascade(u: np.ndarray):
+    return unitary_unit(u, balanced=True)
+
+
 def dirichlet_matrix(v, embed_dim=None):
     phases = np.exp(-1j * np.angle(v))
     y = np.abs(v) ** 2

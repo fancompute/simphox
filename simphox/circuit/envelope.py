@@ -1,3 +1,5 @@
+"""This file is for back-of-the-envelope calculations / figures based on them."""
+
 import numpy as np
 
 
