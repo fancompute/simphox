@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import numpy as np
 import scipy as sp
 
@@ -9,11 +11,11 @@ except ImportError:
     DPHOX_IMPORTED = False
 
 from ..typing import List, Optional
-from .coupling import CouplingNode, PhaseStyle
+from .coupling import CouplingNode, PhaseStyle, transmissivity_to_phase, direct_transmissivity
 from .forward import ForwardCouplingCircuit
 
 
-def _tree(indices: np.ndarray, n_rails: int, start: int = 0, level: int = 0,
+def _tree(indices: np.ndarray, n_rails: int, start: int = 0, column: int = 0,
           balanced: bool = True) -> List[CouplingNode]:
     """Recursive helper function to generate balanced binary tree architecture.
 
@@ -26,7 +28,7 @@ def _tree(indices: np.ndarray, n_rails: int, start: int = 0, level: int = 0,
         indices: Ordered indices into the tree nodes (splitting ratio, losses, errors, etc. all use this).
         n_rails: Number of rails in the system.
         start: Starting index for the tree.
-        level: Level index for the tree (leaves have largest level index :math:`\\log_2 n`).
+        column: column index for the tree (leaves have largest column index :math:`\\log_2 n`).
         balanced: If balanced, does balanced tree (:code:`m = n // 2`) otherwise linear chain (:code:`m = n - 1`).
 
     Returns:
@@ -41,9 +43,37 @@ def _tree(indices: np.ndarray, n_rails: int, start: int = 0, level: int = 0,
     top = indices[1:m]
     bottom = indices[m:]
     nodes.append(CouplingNode(indices[0], top=start + m - 1, bottom=start + n - 1, n=n_rails,
-                              alpha=top.size + 1, beta=bottom.size + 1, level=level))
-    nodes.extend(_tree(top, n_rails, start, level + 1, balanced))
-    nodes.extend(_tree(bottom, n_rails, start + m, level + 1, balanced))
+                              alpha=top.size + 1, beta=bottom.size + 1, column=column))
+    nodes.extend(_tree(top, n_rails, start, column + 1, balanced))
+    nodes.extend(_tree(bottom, n_rails, start + m, column + 1, balanced))
+    return nodes
+
+
+def _butterfly(n: int, n_rails: int, start: int = 0, column: int = 0) -> List[CouplingNode]:
+    """Recursive helper function to generate a balanced butterfly architecture (works best with powers of 2).
+
+    Our network data structure is similar to how arrays are generally treated as tree data structures
+    in computer science, where the waveguide rail index refers to the index of the vector propagating through
+    the coupling network.
+
+    Args:
+        n: The number of modes in the binary tree (uses the top :math:`n` modes of the system).
+        n_rails: Number of rails in the system.
+        start: Starting index for the tree.
+        column: column index for the tree (leaves have largest column index :math:`\\log_2 n`).
+
+    Returns:
+        A list of :code:`CouplingNode`'s in order that modes visit them.
+
+    """
+    nodes = []
+    m = n // 2
+    if n == 1:
+        return nodes
+    nodes.extend([CouplingNode(top=start + i, bottom=start + m + i, n=n_rails,
+                               alpha=m + 1, beta=m + 1, column=column) for i in range(m)])
+    nodes.extend(_butterfly(m, n_rails, start, column + 1))
+    nodes.extend(_butterfly(n - m, n_rails, start + m, column + 1))
     return nodes
 
 
@@ -60,10 +90,26 @@ def tree(n: int, n_rails: Optional[int] = None, balanced: bool = True) -> Forwar
 
     """
     n_rails = n if n_rails is None else n_rails
-    return ForwardCouplingCircuit(_tree(np.arange(n - 1), n_rails, balanced=balanced)).invert_levels()
+    return ForwardCouplingCircuit(_tree(np.arange(n - 1), n_rails, balanced=balanced)).invert_columns()
 
 
-def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase_style: str = PhaseStyle.TOP):
+def butterfly(n: int, n_rails: Optional[int] = None) -> ForwardCouplingCircuit:
+    """Return a butterfly architecture
+
+    Args:
+        n: Number of inputs into the tree.
+        n_rails: Embed the first :code:`n` rails in an :code:`n_rails`-rail system (default :code:`n_rails == n`).
+
+    Returns:
+        A :code:`CouplingCircuit` consisting of :code:`CouplingNode`'s arranged in a tree network.
+
+    """
+    n_rails = n if n_rails is None else n_rails
+    return ForwardCouplingCircuit(_butterfly(n - 1, n_rails)).invert_columns()
+
+
+def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase_style: str = PhaseStyle.TOP,
+                error_mean_std: Tuple[float, float] = (0., 0.), loss_mean_std: Tuple[float, float] = (0., 0.)):
     """Generate an architecture based on our recursive definitions programmed to implement normalized vector :code:`v`.
 
     Args:
@@ -71,31 +117,40 @@ def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase
         n_rails: Embed the first :code:`n` rails in an :code:`n_rails`-rail system (default :code:`n_rails == n`).
         balanced: If balanced, does balanced tree (:code:`m = n // 2`) otherwise linear chain (:code:`m = n - 1`).
         phase_style: Phase style for the nodes (see the :code:`PhaseStyle` enum).
+        error_mean_std: Mean and standard deviation for errors (in radians).
+        loss_mean_std: Mean and standard deviation for losses (in dB).
 
     Returns:
         Coupling network, thetas and phis that initialize the coupling network to implement normalized v.
     """
     network = tree(v.shape[0], n_rails=n_rails, balanced=balanced)
+    error_mean, error_std = error_mean_std
+    loss_mean, loss_std = loss_mean_std
+    network = network.add_error_mean(error_mean, loss_mean).add_error_variance(error_std, loss_std)
     thetas = np.zeros(v.shape[0] - 1)
     phis = np.zeros(v.shape[0] - 1)
     w = v.copy()
     w = w[:, np.newaxis] if w.ndim == 1 else w
-    for nc in network.levels:
+    for nc in network.columns:
         # grab the elements for the top and bottom arms of the mzi.
         top = w[(nc.top,)]
         bottom = w[(nc.bottom,)]
-
+        mzi_terms = network.mzi_terms.T[(nc.node_idxs,)].T
+        cc, cs, sc, ss = mzi_terms
+        # el, er = network.errors_left, network.errors_right
         # Vectorized (efficient!) nullification
         if phase_style == PhaseStyle.SYMMETRIC:
             raise NotImplementedError('Require phase_style not be of the SYMMETRIC variety.')
         elif phase_style == PhaseStyle.BOTTOM:
-            theta = np.arctan2(np.abs(bottom[:, -1]), np.abs(top[:, -1])) * 2
+            theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
             phi = np.angle(top[:, -1]) - np.angle(bottom[:, -1])
+            phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
         else:
-            theta = -np.arctan2(np.abs(bottom[:, -1]), np.abs(top[:, -1])) * 2
-            phi = np.angle(bottom[:, -1]) - np.angle(top[:, -1])
+            theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
+            phi = np.angle(bottom[:, -1]) - np.angle(top[:, -1]) + np.pi
+            phi -= np.angle(-ss + cc * np.exp(1j * theta)) - np.angle(1j * (cs + np.exp(1j * theta) * sc))
 
-        # Vectorized (efficient!) parallel mzi elements used to compute the
+        # Vectorized (efficient!) parallel mzi elements
         t11, t12, t21, t22 = nc.parallel_mzi_fn(phase_style=phase_style)(theta, phi)
         t11, t12, t21, t22 = t11[:, np.newaxis], t12[:, np.newaxis], t21[:, np.newaxis], t22[:, np.newaxis]
 
@@ -103,22 +158,25 @@ def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase
         w[(nc.top + nc.bottom,)] = np.vstack([t11 * top + t21 * bottom,
                                               t12 * top + t22 * bottom])
 
-        # the resulting thetas and phis, indexed according to the coupling network specifications
+        # The resulting thetas and phis, indexed according to the coupling network specifications
         thetas[(nc.node_idxs,)] = theta
         phis[(nc.node_idxs,)] = phi
 
-    gammas = -np.angle(np.eye(v.size)[v.size - 1] * w[-1, -1])
+    gammas = -np.angle(np.eye(v.shape[0])[v.shape[0] - 1] * w[-1, -1])
 
     return network, thetas, phis, gammas, w.squeeze()
 
 
-def unitary_unit(u: np.ndarray, balanced: bool = True, phase_style: str = PhaseStyle.TOP):
+def unitary_unit(u: np.ndarray, balanced: bool = True, phase_style: str = PhaseStyle.TOP,
+                 error_mean_std: Tuple[float, float] = (0., 0.), loss_mean_std: Tuple[float, float] = (0., 0.)):
     """Generate an architecture based on our recursive definitions programmed to implement unitary :code:`u`.
 
     Args:
         u: The (:math:`k \\times n`) mutually orthogonal basis vectors (unitary if :math:`k=n`) to be configured.
         balanced: If balanced, does balanced tree (:code:`m = n // 2`) otherwise linear chain (:code:`m = n - 1`).
         phase_style: Phase style for the nodes (see the :code:`PhaseStyle` enum).
+        error_mean_std: Mean and standard deviation for errors (in radians).
+        loss_mean_std: Mean and standard deviation for losses (in dB).
 
     Returns:
         Node list, thetas and phis.
@@ -129,13 +187,14 @@ def unitary_unit(u: np.ndarray, balanced: bool = True, phase_style: str = PhaseS
     phis = np.array([])
     gammas = np.array([])
     n_rails = u.shape[0]
-    num_levels = 0
+    num_columns = 0
     num_nodes = 0
 
     w = u.conj().T.copy()
     for i in reversed(range(n_rails + 1 - u.shape[1], n_rails)):
         # Generate the architecture as well as the theta and phi for each row of u.
-        nodes, theta, phi, gamma, w = vector_unit(w[:i + 1, :i + 1], n_rails, balanced, phase_style)
+        nodes, theta, phi, gamma, w = vector_unit(w[:i + 1, :i + 1], n_rails, balanced, phase_style,
+                                                  error_mean_std, loss_mean_std)
 
         # Update the phases.
         thetas = np.hstack((thetas, theta))
@@ -145,24 +204,30 @@ def unitary_unit(u: np.ndarray, balanced: bool = True, phase_style: str = PhaseS
         # We need to index the thetas and phis correctly based on the number of programmed nodes in previous subunits
         # For unbalanced architectures (linear chains), we can actually pack them more efficiently into a triangular
         # architecture.
-        nodes.offset(num_nodes).offset_level(num_levels if balanced else 2 * (n_rails - 1 - i))
+        nodes.offset(num_nodes).offset_column(num_columns if balanced else 2 * (n_rails - 1 - i))
 
         # Add the nodes list to the subunits
         subunits.append(nodes)
 
-        # The number of levels and nodes in the architecture are incremented by the subunit size (log_2(i))
-        num_levels += subunits[-1].num_levels
+        # The number of columns and nodes in the architecture are incremented by the subunit size (log_2(i))
+        num_columns += subunits[-1].num_columns
         num_nodes += subunits[-1].num_nodes
     gammas = np.hstack((-np.angle(w[0, 0]), gammas))
-    return ForwardCouplingCircuit.aggregate(subunits), thetas, phis, gammas
+    unit = ForwardCouplingCircuit.aggregate(subunits)
+    unit.params = thetas, phis, gammas
+    return unit
 
 
-def triangular(u: np.ndarray):
-    return unitary_unit(u, balanced=False)
+def triangular(u: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std: Tuple[float, float] = (0., 0.),
+               loss_mean_std: Tuple[float, float] = (0., 0.)):
+    return unitary_unit(u, balanced=False, phase_style=phase_style,
+                        error_mean_std=error_mean_std, loss_mean_std=loss_mean_std)
 
 
-def tree_cascade(u: np.ndarray):
-    return unitary_unit(u, balanced=True)
+def tree_cascade(u: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std: Tuple[float, float] = (0., 0.),
+                 loss_mean_std: Tuple[float, float] = (0., 0.)):
+    return unitary_unit(u, balanced=True, phase_style=phase_style,
+                        error_mean_std=error_mean_std, loss_mean_std=loss_mean_std)
 
 
 def dirichlet_matrix(v, embed_dim=None):

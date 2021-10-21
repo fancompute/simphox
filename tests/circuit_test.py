@@ -17,7 +17,7 @@ RAND_UNITARIES = [unitary_group.rvs(n) for n in N]
 
 
 @pytest.mark.parametrize(
-    "n, balanced, expected_node_idxs, expected_num_levels, expected_num_top, expected_num_bottom",
+    "n, balanced, expected_node_idxs, expected_num_columns, expected_num_top, expected_num_bottom",
     [
         (6, True, [0, 1, 2, 3, 4], 3, [3, 1, 1, 1, 1], [3, 2, 1, 2, 1]),
         (8, True, [0, 1, 2, 3, 4, 5, 6], 3, [4, 2, 1, 1, 2, 1, 1], [4, 2, 1, 1, 2, 1, 1]),
@@ -28,11 +28,11 @@ RAND_UNITARIES = [unitary_group.rvs(n) for n in N]
          [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]),
     ]
 )
-def test_tree_network(n: int, balanced: bool, expected_node_idxs: np.ndarray, expected_num_levels: np.ndarray,
+def test_tree_network(n: int, balanced: bool, expected_node_idxs: np.ndarray, expected_num_columns: np.ndarray,
                       expected_num_top: np.ndarray, expected_num_bottom: np.ndarray):
     circuit = tree(n, balanced=balanced)
     np.testing.assert_allclose(circuit.node_idxs, expected_node_idxs)
-    np.testing.assert_allclose(circuit.num_levels, expected_num_levels)
+    np.testing.assert_allclose(circuit.num_columns, expected_num_columns)
     np.testing.assert_allclose(circuit.alpha, expected_num_top)
     np.testing.assert_allclose(circuit.beta, expected_num_bottom)
 
@@ -43,7 +43,7 @@ def test_tree_network(n: int, balanced: bool, expected_node_idxs: np.ndarray, ex
 )
 def test_vector_configure(v: np.ndarray, balanced: bool):
     circuit, thetas, phis, gammas, _ = vector_unit(v, balanced=balanced)
-    res = circuit.matrix_fn(use_jax=False)(thetas, phis, gammas) @ v
+    res = circuit.matrix_fn(use_jax=False)((thetas, phis, gammas)) @ v
     np.testing.assert_allclose(res, np.eye(v.size)[v.size - 1], atol=1e-10)
 
 
@@ -52,33 +52,31 @@ def test_vector_configure(v: np.ndarray, balanced: bool):
     product(RAND_UNITARIES, [True, False])
 )
 def test_unitary_configure(u: np.ndarray, balanced: bool):
-    circuit, thetas, phis, gammas = unitary_unit(u, balanced=balanced)
-    res = circuit.matrix_fn(use_jax=False)(thetas, phis, gammas)
-    np.testing.assert_allclose(res, u, atol=1e-10)
+    circuit = unitary_unit(u, balanced=balanced)
+    np.testing.assert_allclose(circuit.matrix(), u, atol=1e-10)
 
 
 @pytest.mark.parametrize(
-    "u, num_levels",
+    "u, num_columns",
     zip_longest(RAND_UNITARIES, [2 * n - 3 for n in N])
 )
-def test_triangular_columns(u: np.ndarray, num_levels: int):
-    circuit, _, _, _ = unitary_unit(u, balanced=False)
-    np.testing.assert_allclose(circuit.num_levels, num_levels, atol=1e-10)
+def test_triangular_columns(u: np.ndarray, num_columns: int):
+    circuit = unitary_unit(u, balanced=False)
+    np.testing.assert_allclose(circuit.num_columns, num_columns, atol=1e-10)
 
 
 @pytest.mark.parametrize(
-    "u, num_levels",
+    "u, num_columns",
     zip_longest(RAND_UNITARIES, [1, 5, 14, 25, 45, 49])
 )
-def test_cascade_columns(u: np.ndarray, num_levels: int):
-    circuit, _, _, _ = unitary_unit(u, balanced=True)
-    np.testing.assert_allclose(circuit.num_levels, num_levels, atol=1e-10)
+def test_cascade_columns(u: np.ndarray, num_columns: int):
+    circuit = unitary_unit(u, balanced=True)
+    np.testing.assert_allclose(circuit.num_columns, num_columns, atol=1e-10)
 
 
 @pytest.mark.parametrize(
     "u", RAND_UNITARIES
 )
 def test_rectangular(u: np.ndarray):
-    circuit, thetas, phis, gammas = rectangular(u)
-    res = circuit.matrix_fn(use_jax=False)(thetas, phis, gammas)
-    np.testing.assert_allclose(res, u, atol=1e-10)
+    circuit = rectangular(u)
+    np.testing.assert_allclose(circuit.matrix(), u, atol=1e-10)

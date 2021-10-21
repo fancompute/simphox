@@ -256,6 +256,7 @@ def normalized_fidelity_fn(u: np.ndarray, use_jax: bool = False):
 
     Args:
         u: the true (target) unitary, :math:`U \\in \\mathrm{U}(N)`.
+        use_jax: Use JAX for the normalized fidelity function (for optimizations)
 
     Returns:
         A function that accepts :code:`uhat` the estimated unitary (not necessarily unitary), :math:`\\widehat{U}`

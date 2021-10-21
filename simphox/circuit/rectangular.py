@@ -92,11 +92,6 @@ def grid_common_mode_flow(external_phases: np.ndarray, gamma: np.ndarray):
 
         # shift the phases to the next layer in parallel
         phase_shifts[i + 1] += np.mod(phase_shifts[i], 2 * np.pi)
-
-        # set the current layer's phase to 0 (changing to new phase shifts)
-        # phase_shifts[i] = 0
-        # print(og_phase_shifts, phase_shifts[i])
-        # print(end_idx)
     new_gamma = np.mod(phase_shifts[-1], 2 * np.pi)
     return np.mod(new_phase_shifts.T, 2 * np.pi), new_gamma
 
@@ -162,11 +157,14 @@ def rectangular(u: np.ndarray, pbar: Callable = None):
     node_id = 0
     for i in range(n):
         num_to_interfere = theta.shape[1] - (i % 2) * (1 - n % 2)
-        nodes += [CouplingNode(node_id=node_id + j, n=n, top=2 * j + i % 2, bottom=2 * j + 1 + i % 2, level=i,
+        nodes += [CouplingNode(node_id=node_id + j, n=n, top=2 * j + i % 2, bottom=2 * j + 1 + i % 2, column=i,
                                alpha=alpha[i, j], beta=1)
                   for j in range(num_to_interfere)]
         thetas = np.hstack([thetas, theta[i, :num_to_interfere]])
         phis = np.hstack([phis, phi[i, :num_to_interfere]])
         node_id += num_to_interfere
 
-    return ForwardCouplingCircuit(nodes), thetas, phis, gamma
+    unit = ForwardCouplingCircuit(nodes)
+    unit.params = thetas, phis, gamma
+
+    return unit

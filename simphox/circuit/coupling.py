@@ -1,3 +1,5 @@
+from typing import Union
+
 import numpy as np
 from enum import Enum
 from pydantic.dataclasses import dataclass
@@ -69,7 +71,7 @@ class CouplingNode:
         bottom: Bottom input/output index.
         num_top: Total number of inputs connected to top port (for tree architectures initialization).
         num_bottom: Total number of inputs connected to bottom port (for tree architecture initialization).
-        level: The level label assigned to the node
+        column: The column label assigned to the node
 
     """
     node_id: int = 0
@@ -81,7 +83,19 @@ class CouplingNode:
     bottom: int = 1
     alpha: int = 1
     beta: int = 1
-    level: int = 0
+    column: int = 0
+
+    def __post_init_post_parse__(self):
+        self.stride = self.bottom - self.top
+
+    @property
+    def mzi_terms(self):
+        return [
+            np.cos(np.pi / 4 + self.error_right) * np.cos(np.pi / 4 + self.error),
+            np.cos(np.pi / 4 + self.error_right) * np.sin(np.pi / 4 + self.error),
+            np.sin(np.pi / 4 + self.error_right) * np.cos(np.pi / 4 + self.error),
+            np.sin(np.pi / 4 + self.error_right) * np.sin(np.pi / 4 + self.error),
+        ]
 
     def ideal_node(self, s: float = 0, phi: float = 0):
         """Ideal node with parameters s and phi that can be embedded in a circuit.
@@ -155,3 +169,36 @@ class CouplingNode:
         """
         mat = (1 - self.loss) * coupling_matrix_phase(theta, self.error, self.loss) @ phase_matrix(phi)
         return _embed_2x2(mat, self.n, self.top, self.bottom) if embed else mat
+
+
+def direct_transmissivity(top: np.ndarray, bottom: np.ndarray):
+    """Get the direct transmissivity between top and bottom
+
+    Args:
+        top: Top vector elements
+        bottom: Bottom vector elements
+
+    Returns:
+        The transmissivities
+
+    """
+    return np.abs(top) ** 2 / (np.abs(top) ** 2 + np.abs(bottom) ** 2)
+
+
+def transmissivity_to_phase(s: Union[float, np.ndarray], mzi_terms: np.ndarray = None):
+    """Convert transmissivity :math:`\\boldsymbol{s}` to phase :math:`\\boldsymbol{\\theta}`.
+
+    Args:
+        s: The transmissivity float or array.
+        mzi_terms: The splitting terms :code:`(cs, sc)` for an MZI node. If :code:`None`, assumes 0.5 power for each.
+
+    Returns:
+        The phase :math:`\\boldsymbol{\\theta}` corresponding to the transmissivity :math:`\\boldsymbol{s}`.
+
+    """
+
+    if mzi_terms is not None:
+        _, cs, sc, _ = mzi_terms
+    else:
+        cs = sc = 0.5
+    return np.arccos(np.minimum(np.maximum((s - cs ** 2 - sc ** 2) / (2 * cs * sc), -1), 1))
