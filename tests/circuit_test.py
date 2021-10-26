@@ -8,6 +8,8 @@ from simphox.circuit import unitary_unit, vector_unit, rectangular
 from simphox.circuit.cascade import tree
 from simphox.utils import random_vector
 
+import copy
+
 np.random.seed(0)
 
 N = [2, 4, 7, 10, 15, 16]
@@ -80,3 +82,23 @@ def test_cascade_columns(u: np.ndarray, num_columns: int):
 def test_rectangular(u: np.ndarray):
     circuit = rectangular(u)
     np.testing.assert_allclose(circuit.matrix(), u, atol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "u", RAND_UNITARIES
+)
+def test_inverse(u: np.ndarray):
+    circuit = rectangular(u)
+    np.testing.assert_allclose(circuit.matrix(), circuit.matrix(back=True).T, atol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "u", RAND_UNITARIES
+)
+def test_program_null_basis(u: np.ndarray):
+    circuit = rectangular(u)
+    basis = circuit.nullification_basis
+    params = copy.deepcopy(circuit.params)
+    circuit.program_by_null_basis(basis)
+    for param, param_expected in zip(params, circuit.params):
+        np.testing.assert_allclose(param, param_expected, atol=1e-10)

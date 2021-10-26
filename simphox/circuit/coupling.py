@@ -182,7 +182,7 @@ def direct_transmissivity(top: np.ndarray, bottom: np.ndarray):
         The transmissivities
 
     """
-    return np.abs(top) ** 2 / (np.abs(top) ** 2 + np.abs(bottom) ** 2)
+    return np.abs(top) ** 2 / (np.abs(top) ** 2 + np.abs(bottom) ** 2 + np.spacing(1))
 
 
 def transmissivity_to_phase(s: Union[float, np.ndarray], mzi_terms: np.ndarray = None):

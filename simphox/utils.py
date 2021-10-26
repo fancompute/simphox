@@ -251,7 +251,7 @@ def random_unitary(n: int) -> np.ndarray:
     return unitary_group.rvs(n)
 
 
-def normalized_fidelity_fn(u: np.ndarray, use_jax: bool = False):
+def normalized_error(u: np.ndarray, use_jax: bool = False):
     """Normalized fidelity cost function.
 
     Args:
@@ -266,4 +266,4 @@ def normalized_fidelity_fn(u: np.ndarray, use_jax: bool = False):
 
     xp = jnp if use_jax else np
     u = jnp.array(u) if use_jax else u
-    return lambda uhat: xp.abs(xp.trace(u.conj().T @ uhat)) ** 2 / xp.abs(xp.trace(uhat.conj().T @ uhat)) ** 2
+    return lambda uhat: xp.sqrt(1 - xp.abs(xp.trace(u.conj().T @ uhat)) ** 2 / xp.abs(xp.trace(uhat.conj().T @ uhat)) ** 2)

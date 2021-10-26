@@ -11,8 +11,8 @@ except ImportError:
     DPHOX_IMPORTED = False
 
 from ..typing import List, Optional
-from .coupling import CouplingNode, PhaseStyle, transmissivity_to_phase, direct_transmissivity
-from .forward import ForwardCouplingCircuit
+from .coupling import CouplingNode, PhaseStyle
+from .forward import ForwardMesh
 
 
 def _tree(indices: np.ndarray, n_rails: int, start: int = 0, column: int = 0,
@@ -77,7 +77,7 @@ def _butterfly(n: int, n_rails: int, start: int = 0, column: int = 0) -> List[Co
     return nodes
 
 
-def tree(n: int, n_rails: Optional[int] = None, balanced: bool = True) -> ForwardCouplingCircuit:
+def tree(n: int, n_rails: Optional[int] = None, balanced: bool = True) -> ForwardMesh:
     """Return a balanced or linear chain tree of MZIs.
 
     Args:
@@ -90,10 +90,10 @@ def tree(n: int, n_rails: Optional[int] = None, balanced: bool = True) -> Forwar
 
     """
     n_rails = n if n_rails is None else n_rails
-    return ForwardCouplingCircuit(_tree(np.arange(n - 1), n_rails, balanced=balanced)).invert_columns()
+    return ForwardMesh(_tree(np.arange(n - 1), n_rails, balanced=balanced)).invert_columns()
 
 
-def butterfly(n: int, n_rails: Optional[int] = None) -> ForwardCouplingCircuit:
+def butterfly(n: int, n_rails: Optional[int] = None) -> ForwardMesh:
     """Return a butterfly architecture
 
     Args:
@@ -105,7 +105,7 @@ def butterfly(n: int, n_rails: Optional[int] = None) -> ForwardCouplingCircuit:
 
     """
     n_rails = n if n_rails is None else n_rails
-    return ForwardCouplingCircuit(_butterfly(n - 1, n_rails)).invert_columns()
+    return ForwardMesh(_butterfly(n - 1, n_rails)).invert_columns()
 
 
 def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase_style: str = PhaseStyle.TOP,
@@ -135,23 +135,11 @@ def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase
         # grab the elements for the top and bottom arms of the mzi.
         top = w[(nc.top,)]
         bottom = w[(nc.bottom,)]
-        mzi_terms = network.mzi_terms.T[(nc.node_idxs,)].T
-        cc, cs, sc, ss = mzi_terms
-        # el, er = network.errors_left, network.errors_right
-        # Vectorized (efficient!) nullification
-        if phase_style == PhaseStyle.SYMMETRIC:
-            raise NotImplementedError('Require phase_style not be of the SYMMETRIC variety.')
-        elif phase_style == PhaseStyle.BOTTOM:
-            theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
-            phi = np.angle(top[:, -1]) - np.angle(bottom[:, -1])
-            phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
-        else:
-            theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
-            phi = np.angle(bottom[:, -1]) - np.angle(top[:, -1]) + np.pi
-            phi -= np.angle(-ss + cc * np.exp(1j * theta)) - np.angle(1j * (cs + np.exp(1j * theta) * sc))
+
+        theta, phi = nc.parallel_nullify(w, network.mzi_terms)
 
         # Vectorized (efficient!) parallel mzi elements
-        t11, t12, t21, t22 = nc.parallel_mzi_fn(phase_style=phase_style)(theta, phi)
+        t11, t12, t21, t22 = nc.parallel_mzi_fn()(theta, phi)
         t11, t12, t21, t22 = t11[:, np.newaxis], t12[:, np.newaxis], t21[:, np.newaxis], t22[:, np.newaxis]
 
         # The final vector after the vectorized multiply
@@ -213,19 +201,43 @@ def unitary_unit(u: np.ndarray, balanced: bool = True, phase_style: str = PhaseS
         num_columns += subunits[-1].num_columns
         num_nodes += subunits[-1].num_nodes
     gammas = np.hstack((-np.angle(w[0, 0]), gammas))
-    unit = ForwardCouplingCircuit.aggregate(subunits)
+    unit = ForwardMesh.aggregate(subunits)
     unit.params = thetas, phis, gammas
     return unit
 
 
 def triangular(u: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std: Tuple[float, float] = (0., 0.),
                loss_mean_std: Tuple[float, float] = (0., 0.)):
+    """Triangular mesh.
+
+    Args:
+        u: Unitary matrix
+        phase_style: Phase style for the nodes of the mesh.
+        error_mean_std: Split error mean and standard deviation
+        loss_mean_std: Loss error mean and standard deviation (dB)
+
+    Returns:
+        A triangular mesh object.
+
+    """
     return unitary_unit(u, balanced=False, phase_style=phase_style,
                         error_mean_std=error_mean_std, loss_mean_std=loss_mean_std)
 
 
 def tree_cascade(u: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std: Tuple[float, float] = (0., 0.),
                  loss_mean_std: Tuple[float, float] = (0., 0.)):
+    """Balanced cascade mesh.
+
+    Args:
+        u: Unitary matrix
+        phase_style: Phase style for the nodes of the mesh.
+        error_mean_std: Split error mean and standard deviation
+        loss_mean_std: Loss error mean and standard deviation (dB)
+
+    Returns:
+        A tree cascade mesh object.
+
+    """
     return unitary_unit(u, balanced=True, phase_style=phase_style,
                         error_mean_std=error_mean_std, loss_mean_std=loss_mean_std)
 

@@ -18,17 +18,17 @@ except ImportError:
 from pydantic.dataclasses import dataclass
 from scipy.stats import beta
 
-from ..typing import List, Union
-from ..utils import fix_dataclass_init_docs, normalized_fidelity_fn
-from .coupling import CouplingNode, PhaseStyle, transmissivity_to_phase
+from ..typing import List, Union, PhaseParams
+from ..utils import fix_dataclass_init_docs, normalized_error
+from .coupling import CouplingNode, PhaseStyle, transmissivity_to_phase, direct_transmissivity
 
 
 @fix_dataclass_init_docs
 @dataclass
-class ForwardCouplingCircuit:
-    """A forward couping circuit is a feedforward "mesh" of coupling nodes that interact arbitrary waveguide pairs.
+class ForwardMesh:
+    """A :code:`ForwardMesh` is a feedforward forward couping circuit of coupling nodes that interact arbitrary waveguide pairs.
 
-    The :code:`CouplingCircuit` has the convenient property that it is acyclic, so this means that we can simply
+    The :code:`ForwardMesh` has the convenient property that it is acyclic, so this means that we can simply
     use a list of nodes defined in time-order traversal to define the entire circuit. This greatly simplifies
     the notation and code necessary to define such a circuit.
 
@@ -40,6 +40,7 @@ class ForwardCouplingCircuit:
 
     """
     nodes: List[CouplingNode]
+    phase_style: str = PhaseStyle.TOP
 
     def __post_init_post_parse__(self):
         self.top = tuple([int(node.top) for node in self.nodes])
@@ -134,7 +135,7 @@ class ForwardCouplingCircuit:
         return transmissivity_to_phase(self.rand_s(), self.mzi_terms)
 
     @classmethod
-    def aggregate(cls, nodes_or_node_lists: List[Union[CouplingNode, "ForwardCouplingCircuit"]]):
+    def aggregate(cls, nodes_or_node_lists: List[Union[CouplingNode, "ForwardMesh"]]):
         """Aggregate nodes and/or node lists into a single :code:`NodeList`.
 
         Args:
@@ -167,17 +168,17 @@ class ForwardCouplingCircuit:
         nodes_by_column = defaultdict(list)
         for node in self.nodes:
             nodes_by_column[node.column].append(node)
-        return [ForwardCouplingCircuit(nodes_by_column[column]) for column in range(self.num_columns)]
+        return [ForwardMesh(nodes_by_column[column], phase_style=self.phase_style)
+                for column in range(self.num_columns)]
 
-    def matrix(self, phase_style: str = PhaseStyle.TOP, back: bool = False):
-        return self.matrix_fn(phase_style=phase_style, back=back)()
+    def matrix(self, params: Optional[np.ndarray] = None, back: bool = False):
+        return self.matrix_fn(back=back)(self.params if params is None else params)
 
-    def parallel_mzi_fn(self, phase_style: str = PhaseStyle.TOP, use_jax: bool = False, back: bool = False):
+    def parallel_mzi_fn(self, use_jax: bool = False, back: bool = False):
         """This is a helper function for finding the matrix elements for MZIs in parallel,
         leading to significant speedup.
 
         Args:
-            phase_style: The phase style to use for the parallel MZIs.
             use_jax: Whether to use jax.
             back: Go backward through the MZIs
 
@@ -195,28 +196,28 @@ class ForwardCouplingCircuit:
         # insertion (assume a fixed loss that is global for each node)
         insertion = 1 - self.losses
 
-        if phase_style == PhaseStyle.TOP:
+        if self.phase_style == PhaseStyle.TOP:
             def parallel_mzi(theta, phi):
                 t11 = (-ss + cc * xp.exp(1j * theta)) * xp.exp(1j * phi)
                 t12 = 1j * (cs + sc * xp.exp(1j * theta)) * xp.exp(1j * phi * (1 - back))
                 t21 = 1j * (sc + cs * xp.exp(1j * theta)) * xp.exp(1j * phi * back)
                 t22 = (cc - ss * xp.exp(1j * theta))
                 return insertion * xp.array([t11, t12, t21, t22])
-        elif phase_style == PhaseStyle.BOTTOM:
+        elif self.phase_style == PhaseStyle.BOTTOM:
             def parallel_mzi(theta, phi):
                 t11 = (-ss * xp.exp(1j * theta) + cc)
                 t12 = 1j * (cs * xp.exp(1j * theta) + sc) * xp.exp(1j * phi * back)
                 t21 = 1j * (sc * xp.exp(1j * theta) + cs) * xp.exp(1j * phi * (1 - back))
                 t22 = (cc * xp.exp(1j * theta) - ss) * xp.exp(1j * phi)
                 return insertion * xp.array([t11, t12, t21, t22])
-        elif phase_style == PhaseStyle.SYMMETRIC:
+        elif self.phase_style == PhaseStyle.SYMMETRIC:
             def parallel_mzi(theta, phi):
                 t11 = (-ss + cc * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta / 2))
                 t12 = 1j * (cs + sc * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta / 2))
                 t21 = 1j * (sc + cs * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta / 2))
                 t22 = (cc - ss * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta / 2))
                 return insertion * xp.array([t11, t12, t21, t22])
-        elif phase_style == PhaseStyle.DIFFERENTIAL:
+        elif self.phase_style == PhaseStyle.DIFFERENTIAL:
             def parallel_mzi(theta, phi):
                 t11 = (-ss + cc * xp.exp(1j * theta)) * xp.exp(1j * ((-phi - theta) / 2 + phi * back))
                 t12 = 1j * (cs + sc * xp.exp(1j * theta)) * xp.exp(1j * ((-phi - theta) / 2 + phi * back))
@@ -224,10 +225,10 @@ class ForwardCouplingCircuit:
                 t22 = (cc - ss * xp.exp(1j * theta)) * xp.exp(1j * ((phi - theta) / 2 - phi * back))
                 return insertion * xp.array([t11, t12, t21, t22])
         else:
-            raise ValueError(f"Phase style {phase_style} is not valid.")
-        return parallel_mzi
+            raise ValueError(f"Phase style {self.phase_style} is not valid.")
+        return jit(parallel_mzi) if use_jax else parallel_mzi
 
-    def matrix_fn(self, phase_style: str = PhaseStyle.TOP, use_jax: bool = False, inputs: Optional[np.ndarray] = None,
+    def matrix_fn(self, use_jax: bool = False, inputs: Optional[np.ndarray] = None,
                   back: bool = False):
         """Return a function that returns the matrix representation of this circuit.
 
@@ -241,7 +242,6 @@ class ForwardCouplingCircuit:
         We also go column-by-column to significantly improve the efficiency of the matrix multiplications.
 
         Args:
-            phase_style: The phase style for each node in the network.
             use_jax: Use JAX to accelerate the matrix function for autodifferentiation purposes.
             inputs: The inputs, of shape :code:`(N, K)`, to propagate through the network. If :code:`None`,
                 use the identity matrix.
@@ -255,16 +255,20 @@ class ForwardCouplingCircuit:
         """
 
         node_columns = self.columns[::-1] if back else self.columns
-        node_fn = self.parallel_mzi_fn(phase_style, use_jax=use_jax, back=back)
+        node_fn = self.parallel_mzi_fn(use_jax=use_jax, back=back)
         xp = jnp if use_jax else np
-        inputs = xp.eye(node_columns[0].n, dtype=xp.complex128) if inputs is None else xp.array(inputs)
+        inputs = xp.eye(node_columns[0].n, dtype=xp.complex128) if inputs is None else inputs
 
         # Define a function that represents an mzi column given inputs and all available thetas and phis
-        def matrix(params: Optional[Tuple[xp.ndarray, xp.ndarray, np.ndarray]] = None):
-            thetas, phis, gammas = self.params if params is None else params
-            outputs = inputs.copy()
+        def matrix(params: Optional[Tuple[xp.ndarray, xp.ndarray, np.ndarray]]):
+            thetas, phis, gammas = params
+            outputs = xp.array(inputs.copy())
             # get the matrix elements for all nodes in parallel
             t11, t12, t21, t22 = node_fn(thetas, phis)
+
+            if back:
+                outputs = outputs * (xp.exp(1j * gammas) * outputs.T).T
+
             for nc in node_columns:
                 # collect the inputs to be interfered
                 top = outputs[(nc.top,)]
@@ -288,7 +292,9 @@ class ForwardCouplingCircuit:
                                                                 s12 * top + s22 * bottom])
 
             # multiply the gamma phases present at the end of the network (sets the reference phase front).
-            return (xp.exp(1j * gammas) * outputs.T).T
+            if not back:
+                outputs = (xp.exp(1j * gammas) * outputs.T).T
+            return outputs
 
         return matrix
 
@@ -300,7 +306,7 @@ class ForwardCouplingCircuit:
             The column-ordered nodes for this circuit (useful in cases nodes are out of order).
 
         """
-        return ForwardCouplingCircuit.aggregate(self.columns)
+        return ForwardMesh.aggregate(self.columns)
 
     def add_error_mean(self, error: Union[float, np.ndarray] = 0, loss_db: Union[float, np.ndarray] = 0,
                        error_right: Optional[Union[float, np.ndarray]] = None):
@@ -325,7 +331,9 @@ class ForwardCouplingCircuit:
             node.error = e
             node.error_right = er
             node.loss = 1 - 10 ** (loss / 10)
-        return ForwardCouplingCircuit(new_nodes)
+        mesh = ForwardMesh(new_nodes)
+        mesh.params = self.params
+        return mesh
 
     def add_error_variance(self, error_std: float, loss_db_std: float = 0, correlated_error: bool = True):
         """Add split error (in phase) and loss error (in dB) variance values to the circuit.
@@ -349,21 +357,21 @@ class ForwardCouplingCircuit:
             node.error = e
             node.error_right = er
             node.loss = 1 - 10 ** (loss / 10)
-        return ForwardCouplingCircuit(new_nodes)
+        mesh = ForwardMesh(new_nodes)
+        mesh.params = self.params
+        return mesh
 
     @property
     def loss_db(self):
         return 10 * np.log10(1 - self.losses)
 
-    def matrix_opt(self, uopt: np.ndarray, thetas: np.ndarray, phis: np.ndarray, gammas: np.ndarray,
+    def matrix_opt(self, uopt: np.ndarray, params: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
                    step_size: float = 0.1, use_jit: bool = False):
         """Matrix optimizer.
 
         Args:
             uopt: Unitary matrix to optimize.
-            thetas: Initial thetas (internal phases).
-            phis: Initial phis (external phases).
-            gammas: Initial gammas (output phase front).
+            params: Initial params (uses params of the class if :code:`None`).
             step_size: Step size for the optimizer.
             use_jit: Whether to use JIT to compile the JAX function (faster to optimize, slower to compile!).
 
@@ -371,52 +379,58 @@ class ForwardCouplingCircuit:
             A tuple of the initial state :code:`init` and the :code:`update_fn`.
 
         """
-        fidelity = normalized_fidelity_fn(uopt, use_jax=True)
+        error = normalized_error(uopt, use_jax=True)
         matrix_fn = self.matrix_fn(use_jax=True)
         matrix_fn = jit(matrix_fn) if use_jit else matrix_fn
 
         def cost_fn(params: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]):
-            return -fidelity(matrix_fn(params))
+            return error(matrix_fn(params))
 
         opt_init, opt_update, get_params = adam(step_size=step_size)
+        thetas, phis, gammas = self.params if params is None else params
         init = opt_init((jnp.array(thetas), jnp.array(phis), jnp.array(gammas)))
 
         def update_fn(i, state):
             v, g = value_and_grad(cost_fn)(get_params(state))
             return v, opt_update(i, g, state)
 
-        return init, update_fn
+        return init, update_fn, get_params
 
-    def propagate(self, inputs: Optional[np.ndarray] = None, phase_style: str = PhaseStyle.TOP,
-                  back: bool = False, column_offset: int = 0):
-        """
+    def propagate(self, inputs: Optional[np.ndarray] = None, back: bool = False,
+                  column_cutoff: Optional[int] = None, params: Optional[PhaseParams] = None):
+        """Propagate :code:`inputs` through the mesh
 
         Args:
-            inputs:
-            phase_style:
+            inputs: Inputs for propagation of the modes through the mesh.
             back: send the light backward (flip the mesh)
+            column_cutoff: The cutoff column where to start propagating (useful for nullification basis)
 
         Returns:
 
         """
-        thetas, phis, gammas = self.params
+
+        params = self.params if params is None else params
+        thetas, phis, gammas = params
 
         node_columns = self.columns[::-1] if back else self.columns
         inputs = np.eye(self.n, dtype=np.complex128) if inputs is None else inputs
-        outputs = inputs
-        t11, t12, t21, t22 = self.parallel_mzi_fn(phase_style, use_jax=False, back=back)(thetas, phis)
+        inputs = inputs[:, np.newaxis] if inputs.ndim == 1 else inputs
+        outputs = inputs.copy()
+        t11, t12, t21, t22 = self.parallel_mzi_fn(use_jax=False, back=back)(thetas, phis)
         propagated = [outputs.copy()]
+        if column_cutoff is None:
+            column_cutoff = -1 if back else self.num_columns
 
-        if back and column_offset > 0:
+        if back and column_cutoff == -1:
             outputs = (np.exp(1j * gammas) * outputs.T).T
             propagated.append(outputs.copy())
 
         # get the matrix elements for all nodes in parallel
         for nc in node_columns:
-            if back and (nc.column_by_node.size == 0 or column_offset >= nc.column_by_node[0]):
-                pass
-            if not back and (nc.column_by_node.size == 0 or column_offset > nc.column_by_node[0]):
-                pass
+            if back and (nc.column_by_node.size == 0 or self.num_columns - column_cutoff < nc.column_by_node[0]):
+                continue
+            if not back and (nc.column_by_node.size == 0 or column_cutoff <= nc.column_by_node[0]):
+                continue
             top = outputs[(nc.top,)]
             bottom = outputs[(nc.bottom,)]
             s11, s12 = t11[(nc.node_idxs,)][:, np.newaxis], t12[(nc.node_idxs,)][:, np.newaxis]
@@ -425,25 +439,83 @@ class ForwardCouplingCircuit:
                                                         s12 * top + s22 * bottom])
             propagated.append(outputs.copy())
 
-        if not back and column_offset > self.num_columns:
+        if not back and column_cutoff == -1:
             outputs = (np.exp(1j * gammas) * outputs.T).T
             propagated.append(outputs.copy())
         return np.array(propagated)
 
     @property
     def nullification_basis(self):
+        """The nullificuation basis for parallel nullification and error correction of non-self-configurable
+        architectures.
+
+        Returns:
+            The nullification basis for the architecture based on the internal thetas, phis, and gammas.
+
+        """
         node_columns = self.columns
         null_vecs = []
         for nc in node_columns:
             vector = np.zeros(self.n, dtype=np.complex128)
             vector[(nc.bottom,)] = 1
-            null_vecs.append(self.propagate(vector[:, np.newaxis], column_offset=nc.column_by_node[0])[-1])
-        return np.array(null_vecs).squeeze().conj()
+            null_vecs.append(
+                self.propagate(
+                    vector[:, np.newaxis],
+                    column_cutoff=self.num_columns - nc.column_by_node[0],
+                    back=True)[-1]
+            )
+        return np.array(null_vecs)[..., 0].conj()
+
+    def program_by_null_basis(self, nullification_basis: np.ndarray):
+        """Parallel program the mesh using the null basis.
+
+        Args:
+            nullification_basis: The nullification basis for the photonic mesh network.
+
+        Returns:
+            The parameters to be programmed
+
+        """
+
+        node_columns = self.columns
+        for nc, w in zip(node_columns, nullification_basis):
+            vector = self.propagate(w.copy(), column_cutoff=nc.column_by_node[0])[-1]
+            theta, phi = nc.parallel_nullify(vector, self.mzi_terms)
+            self.thetas[(nc.node_idxs,)] = theta
+            self.phis[(nc.node_idxs,)] = np.mod(phi, 2 * np.pi)
+
+    def parallel_nullify(self, vector: np.ndarray, mzi_terms: np.ndarray):
+        """Assuming the mesh is a column, this method runs a parallel nullify algorithm to set up
+        the elements of the column in parallel.
+
+        Args:
+            vector: The vector entering the column.
+            mzi_terms: The MZI terms account for errors in the couplers of the photonic circuit.
+
+        Returns:
+            The programmed phases
+
+        """
+        top = vector[(self.top,)]
+        bottom = vector[(self.bottom,)]
+        mzi_terms = mzi_terms.T[(self.node_idxs,)].T
+        cc, cs, sc, ss = mzi_terms
+        if self.phase_style == PhaseStyle.SYMMETRIC:
+            raise NotImplementedError('Require phase_style not be of the SYMMETRIC variety.')
+        elif self.phase_style == PhaseStyle.BOTTOM:
+            theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
+            phi = np.angle(top[:, -1]) - np.angle(bottom[:, -1])
+            phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
+        else:
+            theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
+            phi = np.angle(bottom[:, -1]) - np.angle(top[:, -1]) + np.pi
+            phi -= np.angle(-ss + cc * np.exp(1j * theta)) - np.angle(1j * (cs + np.exp(1j * theta) * sc))
+        return theta, phi
 
     @property
     def params(self):
-        return self.thetas, self.phis, self.gammas
+        return copy.deepcopy((self.thetas, self.phis, self.gammas))
 
     @params.setter
-    def params(self, params):
+    def params(self, params: Tuple[np.ndarray, np.ndarray, np.ndarray]):
         self.thetas, self.phis, self.gammas = params

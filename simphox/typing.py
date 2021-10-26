@@ -19,3 +19,4 @@ State = Tuple[np.ndarray, np.ndarray, Optional[List[np.ndarray]], Optional[List[
 Array = Union[jnp.ndarray, np.ndarray]
 MeasureInfo = Dict[str, List[int]]
 PortLabel = Union[str, int]
+PhaseParams = Tuple[np.ndarray, np.ndarray, np.ndarray]

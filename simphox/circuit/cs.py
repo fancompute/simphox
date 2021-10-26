@@ -2,7 +2,7 @@ import numpy as np
 
 from scipy.linalg import svd, qr, block_diag, dft
 from .coupling import CouplingNode
-from .forward import ForwardCouplingCircuit
+from .forward import ForwardMesh
 
 
 def cs(mat: np.ndarray):
@@ -115,7 +115,7 @@ def bowtie(u: np.ndarray):
     n = u.shape[0]
     thetas = np.zeros((2 * n - 3, n))
     phis = np.zeros((2 * n - 1, n))
-    circuit = ForwardCouplingCircuit(_bowtie(u, n, thetas, phis, 0, n - 2))
+    circuit = ForwardMesh(_bowtie(u, n, thetas, phis, 0, n - 2))
     phis = phis[1:]
     theta = np.zeros(int(n * (n - 1) / 2))
     phi = np.zeros(int(n * (n - 1) / 2))

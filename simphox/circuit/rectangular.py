@@ -9,7 +9,7 @@ except ImportError:
 
 from ..typing import Callable
 from .coupling import CouplingNode
-from .forward import ForwardCouplingCircuit
+from .forward import ForwardMesh
 
 
 def checkerboard_to_param(checkerboard: np.ndarray, units: int):
@@ -157,14 +157,27 @@ def rectangular(u: np.ndarray, pbar: Callable = None):
     node_id = 0
     for i in range(n):
         num_to_interfere = theta.shape[1] - (i % 2) * (1 - n % 2)
-        nodes += [CouplingNode(node_id=node_id + j, n=n, top=2 * j + i % 2, bottom=2 * j + 1 + i % 2, column=i,
+        nodes += [CouplingNode(node_id=node_id + j, n=n, column=i,
+                               top=2 * j + i % 2, bottom=2 * j + 1 + i % 2,
                                alpha=alpha[i, j], beta=1)
                   for j in range(num_to_interfere)]
         thetas = np.hstack([thetas, theta[i, :num_to_interfere]])
         phis = np.hstack([phis, phi[i, :num_to_interfere]])
         node_id += num_to_interfere
 
-    unit = ForwardCouplingCircuit(nodes)
+    unit = ForwardMesh(nodes)
     unit.params = thetas, phis, gamma
 
     return unit
+
+
+def rectangular_rows(rectangular_mesh: ForwardMesh):
+    n = rectangular_mesh.n
+    rows = [[] for _ in range(n - 1)]
+    for i in range(n - 1):
+        for j in range(i + 1):
+            pairwise_index = n + j - i - 2 if i % 2 else i - j
+            rows[i].append(CouplingNode(n=n, top=n - pairwise_index - 2, bottom=n - pairwise_index - 1,
+                                        column=n - j - 1 if i % 2 else j))
+    return [ForwardMesh(row).column_ordered for row in rows]
+
