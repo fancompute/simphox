@@ -174,6 +174,26 @@ class ForwardMesh:
     def matrix(self, params: Optional[np.ndarray] = None, back: bool = False):
         return self.matrix_fn(back=back)(self.params if params is None else params)
 
+    def parallel_dc(self, right: bool = False):
+        """This is a helper function for parallel directional couplers
+        across all directional couplers in the mesh.
+
+        Args:
+            right: Whether to go to the right.
+
+        Returns:
+            A function that accepts the thetas and phis as inputs and outputs the vectorized
+            MZI matrix elements
+
+        """
+        insertion = np.sqrt(1 - self.losses)
+        errors = self.errors_right if right else self.errors_left
+        t11 = np.sin(np.pi / 4 + errors)
+        t12 = 1j * np.cos(np.pi / 4 + errors)
+        t21 = 1j * np.cos(np.pi / 4 + errors)
+        t22 = np.sin(np.pi / 4 + errors)
+        return insertion * np.array([t11, t12, t21, t22])
+
     def parallel_mzi_fn(self, use_jax: bool = False, back: bool = False):
         """This is a helper function for finding the matrix elements for MZIs in parallel,
         leading to significant speedup.
@@ -244,7 +264,7 @@ class ForwardMesh:
         Args:
             use_jax: Use JAX to accelerate the matrix function for autodifferentiation purposes.
             inputs: The inputs, of shape :code:`(N, K)`, to propagate through the network. If :code:`None`,
-                use the identity matrix.
+                use the identity matrix. This may also be a 1d vector.
             back: Whether to propagate the inputs backwards in the device
 
         Returns:
@@ -258,6 +278,7 @@ class ForwardMesh:
         node_fn = self.parallel_mzi_fn(use_jax=use_jax, back=back)
         xp = jnp if use_jax else np
         inputs = xp.eye(node_columns[0].n, dtype=xp.complex128) if inputs is None else inputs
+        inputs = inputs[..., np.newaxis] if inputs.ndim == 1 else inputs
 
         # Define a function that represents an mzi column given inputs and all available thetas and phis
         def matrix(params: Optional[Tuple[xp.ndarray, xp.ndarray, np.ndarray]]):
@@ -396,16 +417,29 @@ class ForwardMesh:
 
         return init, update_fn, get_params
 
+    def _column_transform(self, v: np.ndarray, matrix_elements: np.ndarray):
+        t11, t12, t21, t22 = matrix_elements
+        top = v[(self.top,)]
+        bottom = v[(self.bottom,)]
+        s11, s12 = t11[(self.node_idxs,)][:, np.newaxis], t12[(self.node_idxs,)][:, np.newaxis]
+        s21, s22 = t21[(self.node_idxs,)][:, np.newaxis], t22[(self.node_idxs,)][:, np.newaxis]
+        v[(self.top + self.bottom,)] = np.vstack([s11 * top + s21 * bottom,
+                                                  s12 * top + s22 * bottom])
+
     def propagate(self, inputs: Optional[np.ndarray] = None, back: bool = False,
-                  column_cutoff: Optional[int] = None, params: Optional[PhaseParams] = None):
+                  column_cutoff: Optional[int] = None, params: Optional[PhaseParams] = None,
+                  explicit: bool = True):
         """Propagate :code:`inputs` through the mesh
 
         Args:
             inputs: Inputs for propagation of the modes through the mesh.
             back: send the light backward (flip the mesh)
             column_cutoff: The cutoff column where to start propagating (useful for nullification basis)
+            params: parameters to use for the propagation (if :code:`None`, use the default params attribute).
+            explicit: Explicitly consider the directional couplers in the propagation
 
         Returns:
+            Propagated fields
 
         """
 
@@ -416,7 +450,12 @@ class ForwardMesh:
         inputs = np.eye(self.n, dtype=np.complex128) if inputs is None else inputs
         inputs = inputs[:, np.newaxis] if inputs.ndim == 1 else inputs
         outputs = inputs.copy()
-        t11, t12, t21, t22 = self.parallel_mzi_fn(use_jax=False, back=back)(thetas, phis)
+        if explicit:
+            left = self.parallel_dc(right=False)
+            right = self.parallel_dc(right=True)
+        else:
+            mzis = self.parallel_mzi_fn(use_jax=False, back=back)(thetas, phis)
+
         propagated = [outputs.copy()]
         if column_cutoff is None:
             column_cutoff = -1 if back else self.num_columns
@@ -431,18 +470,24 @@ class ForwardMesh:
                 continue
             if not back and (nc.column_by_node.size == 0 or column_cutoff <= nc.column_by_node[0]):
                 continue
-            top = outputs[(nc.top,)]
-            bottom = outputs[(nc.bottom,)]
-            s11, s12 = t11[(nc.node_idxs,)][:, np.newaxis], t12[(nc.node_idxs,)][:, np.newaxis]
-            s21, s22 = t21[(nc.node_idxs,)][:, np.newaxis], t22[(nc.node_idxs,)][:, np.newaxis]
-            outputs[(nc.top + nc.bottom,)] = np.vstack([s11 * top + s21 * bottom,
-                                                        s12 * top + s22 * bottom])
-            propagated.append(outputs.copy())
+
+            if explicit:
+                outputs[(nc.top,)] *= np.exp(1j * phis[(nc.node_idxs,)][:, np.newaxis])
+                propagated.append(outputs.copy())
+                nc._column_transform(outputs, left)
+                propagated.append(outputs.copy())
+                outputs[(nc.top,)] *= np.exp(1j * thetas[(nc.node_idxs,)][:, np.newaxis])
+                propagated.append(outputs.copy())
+                nc._column_transform(outputs, right)
+                propagated.append(outputs.copy())
+            else:
+                nc._column_transform(outputs, mzis)
+                propagated.append(outputs.copy())
 
         if not back and column_cutoff == -1:
             outputs = (np.exp(1j * gammas) * outputs.T).T
             propagated.append(outputs.copy())
-        return np.array(propagated)
+        return np.array(propagated).squeeze() if explicit else np.array(propagated)
 
     @property
     def nullification_basis(self):
@@ -462,7 +507,7 @@ class ForwardMesh:
                 self.propagate(
                     vector[:, np.newaxis],
                     column_cutoff=self.num_columns - nc.column_by_node[0],
-                    back=True)[-1]
+                    back=True, explicit=False)[-1]
             )
         return np.array(null_vecs)[..., 0].conj()
 
@@ -479,7 +524,7 @@ class ForwardMesh:
 
         node_columns = self.columns
         for nc, w in zip(node_columns, nullification_basis):
-            vector = self.propagate(w.copy(), column_cutoff=nc.column_by_node[0])[-1]
+            vector = self.propagate(w.copy(), column_cutoff=nc.column_by_node[0], explicit=False)[-1]
             theta, phi = nc.parallel_nullify(vector, self.mzi_terms)
             self.thetas[(nc.node_idxs,)] = theta
             self.phis[(nc.node_idxs,)] = np.mod(phi, 2 * np.pi)

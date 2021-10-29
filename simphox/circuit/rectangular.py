@@ -159,7 +159,7 @@ def rectangular(u: np.ndarray, pbar: Callable = None):
         num_to_interfere = theta.shape[1] - (i % 2) * (1 - n % 2)
         nodes += [CouplingNode(node_id=node_id + j, n=n, column=i,
                                top=2 * j + i % 2, bottom=2 * j + 1 + i % 2,
-                               alpha=alpha[i, j], beta=1)
+                               alpha=1, beta=alpha[i, j])
                   for j in range(num_to_interfere)]
         thetas = np.hstack([thetas, theta[i, :num_to_interfere]])
         phis = np.hstack([phis, phi[i, :num_to_interfere]])

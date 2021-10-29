@@ -35,8 +35,8 @@ def test_tree_network(n: int, balanced: bool, expected_node_idxs: np.ndarray, ex
     circuit = tree(n, balanced=balanced)
     np.testing.assert_allclose(circuit.node_idxs, expected_node_idxs)
     np.testing.assert_allclose(circuit.num_columns, expected_num_columns)
-    np.testing.assert_allclose(circuit.alpha, expected_num_top)
-    np.testing.assert_allclose(circuit.beta, expected_num_bottom)
+    np.testing.assert_allclose(circuit.beta, expected_num_top)
+    np.testing.assert_allclose(circuit.alpha, expected_num_bottom)
 
 
 @pytest.mark.parametrize(
@@ -44,8 +44,8 @@ def test_tree_network(n: int, balanced: bool, expected_node_idxs: np.ndarray, ex
     product(RAND_VECS, [True, False])
 )
 def test_vector_configure(v: np.ndarray, balanced: bool):
-    circuit, thetas, phis, gammas, _ = vector_unit(v, balanced=balanced)
-    res = circuit.matrix_fn(use_jax=False)((thetas, phis, gammas)) @ v
+    circuit, _ = vector_unit(v, balanced=balanced)
+    res = circuit.matrix_fn(use_jax=False)(circuit.params) @ v
     np.testing.assert_allclose(res, np.eye(v.size)[v.size - 1], atol=1e-10)
 
 

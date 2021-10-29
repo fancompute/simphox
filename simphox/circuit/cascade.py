@@ -43,7 +43,7 @@ def _tree(indices: np.ndarray, n_rails: int, start: int = 0, column: int = 0,
     top = indices[1:m]
     bottom = indices[m:]
     nodes.append(CouplingNode(indices[0], top=start + m - 1, bottom=start + n - 1, n=n_rails,
-                              alpha=top.size + 1, beta=bottom.size + 1, column=column))
+                              alpha=bottom.size + 1, beta=top.size + 1, column=column))
     nodes.extend(_tree(top, n_rails, start, column + 1, balanced))
     nodes.extend(_tree(bottom, n_rails, start + m, column + 1, balanced))
     return nodes
@@ -77,7 +77,7 @@ def _butterfly(n: int, n_rails: int, start: int = 0, column: int = 0) -> List[Co
     return nodes
 
 
-def tree(n: int, n_rails: Optional[int] = None, balanced: bool = True) -> ForwardMesh:
+def tree(n: int, n_rails: Optional[int] = None, balanced: bool = True, phase_style: str = PhaseStyle.TOP) -> ForwardMesh:
     """Return a balanced or linear chain tree of MZIs.
 
     Args:
@@ -90,7 +90,7 @@ def tree(n: int, n_rails: Optional[int] = None, balanced: bool = True) -> Forwar
 
     """
     n_rails = n if n_rails is None else n_rails
-    return ForwardMesh(_tree(np.arange(n - 1), n_rails, balanced=balanced)).invert_columns()
+    return ForwardMesh(_tree(np.arange(n - 1), n_rails, balanced=balanced), phase_style=phase_style).invert_columns()
 
 
 def butterfly(n: int, n_rails: Optional[int] = None) -> ForwardMesh:
@@ -123,7 +123,7 @@ def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase
     Returns:
         Coupling network, thetas and phis that initialize the coupling network to implement normalized v.
     """
-    network = tree(v.shape[0], n_rails=n_rails, balanced=balanced)
+    network = tree(v.shape[0], n_rails=n_rails, balanced=balanced, phase_style=phase_style)
     error_mean, error_std = error_mean_std
     loss_mean, loss_std = loss_mean_std
     network = network.add_error_mean(error_mean, loss_mean).add_error_variance(error_std, loss_std)
@@ -150,9 +150,12 @@ def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase
         thetas[(nc.node_idxs,)] = theta
         phis[(nc.node_idxs,)] = phi
 
-    gammas = -np.angle(np.eye(v.shape[0])[v.shape[0] - 1] * w[-1, -1])
+    final_basis_vec = np.zeros(v.shape[0])
+    final_basis_vec[-1] = 1
+    gammas = -np.angle(final_basis_vec * w[-1, -1])
 
-    return network, thetas, phis, gammas, w.squeeze()
+    network.params = thetas, phis, gammas
+    return network, w.squeeze()
 
 
 def unitary_unit(u: np.ndarray, balanced: bool = True, phase_style: str = PhaseStyle.TOP,
@@ -181,21 +184,21 @@ def unitary_unit(u: np.ndarray, balanced: bool = True, phase_style: str = PhaseS
     w = u.conj().T.copy()
     for i in reversed(range(n_rails + 1 - u.shape[1], n_rails)):
         # Generate the architecture as well as the theta and phi for each row of u.
-        nodes, theta, phi, gamma, w = vector_unit(w[:i + 1, :i + 1], n_rails, balanced, phase_style,
-                                                  error_mean_std, loss_mean_std)
+        network, w = vector_unit(w[:i + 1, :i + 1], n_rails, balanced, phase_style,
+                                 error_mean_std, loss_mean_std)
 
         # Update the phases.
-        thetas = np.hstack((thetas, theta))
-        phis = np.hstack((phis, phi))
-        gammas = np.hstack((gamma[-1], gammas))
+        thetas = np.hstack((thetas, network.thetas))
+        phis = np.hstack((phis, network.phis))
+        gammas = np.hstack((network.gammas[-1], gammas))
 
         # We need to index the thetas and phis correctly based on the number of programmed nodes in previous subunits
         # For unbalanced architectures (linear chains), we can actually pack them more efficiently into a triangular
         # architecture.
-        nodes.offset(num_nodes).offset_column(num_columns if balanced else 2 * (n_rails - 1 - i))
+        network.offset(num_nodes).offset_column(num_columns if balanced else 2 * (n_rails - 1 - i))
 
         # Add the nodes list to the subunits
-        subunits.append(nodes)
+        subunits.append(network)
 
         # The number of columns and nodes in the architecture are incremented by the subunit size (log_2(i))
         num_columns += subunits[-1].num_columns
