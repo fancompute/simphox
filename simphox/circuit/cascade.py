@@ -149,7 +149,7 @@ def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase
 
         # The resulting thetas and phis, indexed according to the coupling network specifications
         thetas[(nc.node_idxs,)] = theta
-        phis[(nc.node_idxs,)] = phi
+        phis[(nc.node_idxs,)] = np.mod(phi, 2 * np.pi)
 
     final_basis_vec = np.zeros(v.shape[0])
     final_basis_vec[-1] = 1

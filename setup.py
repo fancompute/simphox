@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-from setuptools import setup
+from setuptools import setup, find_packages
 
 project_name = "simphox"
 
 setup(
     name=project_name,
-    version="0.0.1a1",
-    packages=[project_name],
+    version="0.0.1a4",
+    packages=find_packages(),
     install_requires=[
         'numpy',
         'scipy',

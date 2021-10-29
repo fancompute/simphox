@@ -21,7 +21,7 @@ from scipy.stats import beta
 from ..typing import List, Union, PhaseParams
 from ..utils import fix_dataclass_init_docs, normalized_error
 from .coupling import CouplingNode, PhaseStyle, transmissivity_to_phase, direct_transmissivity
-
+from scipy.special import betaincinv
 
 @fix_dataclass_init_docs
 @dataclass
@@ -123,7 +123,7 @@ class ForwardMesh:
             A randomly initialized :code:`s`.
 
         """
-        return beta.pdf(np.random.rand(self.num_nodes), self.alpha, self.beta)
+        return betaincinv(self.alpha, self.beta, np.random.rand(self.num_nodes))
 
     def rand_theta(self):
         """Randomly initialized coupling phase :math:`\\theta`.
