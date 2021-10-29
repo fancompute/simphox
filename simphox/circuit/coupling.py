@@ -170,6 +170,15 @@ class CouplingNode:
         mat = (1 - self.loss) * coupling_matrix_phase(theta, self.error, self.loss) @ phase_matrix(phi)
         return _embed_2x2(mat, self.n, self.top, self.bottom) if embed else mat
 
+    def nullify(self, vector: np.ndarray, idx: int, lower_theta: bool = False, lower_phi: bool = False):
+        theta = np.arctan2(np.abs(vector[idx]), np.abs(vector[idx + 1])) * 2
+        theta = -theta if lower_theta else theta
+        phi = np.angle(vector[idx + 1]) - np.angle(vector[idx])
+        phi = -phi if lower_phi else phi
+        mat = self.mzi_node_matrix(theta, phi)
+        nullified_vector = mat @ vector
+        return nullified_vector, mat, np.mod(theta, 2 * np.pi), np.mod(phi, 2 * np.pi)
+
 
 def direct_transmissivity(top: np.ndarray, bottom: np.ndarray):
     """Get the direct transmissivity between top and bottom

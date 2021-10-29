@@ -5,7 +5,7 @@ project_name = "simphox"
 
 setup(
     name=project_name,
-    version="0.0.1alpha",
+    version="0.0.1a1",
     packages=[project_name],
     install_requires=[
         'numpy',
@@ -14,7 +14,8 @@ setup(
         'jaxlib',
         'jax',
         'scikit-image',
-        'pydantic'
+        'pydantic',
+        'xarray'
     ],
     extras_require={
         'interactive': ['matplotlib',

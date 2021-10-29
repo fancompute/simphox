@@ -77,7 +77,8 @@ def _butterfly(n: int, n_rails: int, start: int = 0, column: int = 0) -> List[Co
     return nodes
 
 
-def tree(n: int, n_rails: Optional[int] = None, balanced: bool = True, phase_style: str = PhaseStyle.TOP) -> ForwardMesh:
+def tree(n: int, n_rails: Optional[int] = None, balanced: bool = True,
+         phase_style: str = PhaseStyle.TOP) -> ForwardMesh:
     """Return a balanced or linear chain tree of MZIs.
 
     Args:
@@ -211,7 +212,7 @@ def unitary_unit(u: np.ndarray, balanced: bool = True, phase_style: str = PhaseS
 
 def triangular(u: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std: Tuple[float, float] = (0., 0.),
                loss_mean_std: Tuple[float, float] = (0., 0.)):
-    """Triangular mesh.
+    """Triangular mesh that analyzes a unitary matrix :code:`u`.
 
     Args:
         u: Unitary matrix
@@ -229,7 +230,7 @@ def triangular(u: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std:
 
 def tree_cascade(u: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std: Tuple[float, float] = (0., 0.),
                  loss_mean_std: Tuple[float, float] = (0., 0.)):
-    """Balanced cascade mesh.
+    """Balanced cascade mesh that analyzes a unitary matrix :code:`u`.
 
     Args:
         u: Unitary matrix
@@ -243,6 +244,41 @@ def tree_cascade(u: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_st
     """
     return unitary_unit(u, balanced=True, phase_style=phase_style,
                         error_mean_std=error_mean_std, loss_mean_std=loss_mean_std)
+
+
+def balanced_tree(v: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std: Tuple[float, float] = (0., 0.),
+                  loss_mean_std: Tuple[float, float] = (0., 0.)):
+    """Balanced tree mesh that analyzes a vector :code:`v`.
+
+    Args:
+        v: Vector unit
+        phase_style: Phase style for the nodes of the mesh.
+        error_mean_std: Split error mean and standard deviation
+        loss_mean_std: Loss error mean and standard deviation (dB)
+
+    Returns:
+        A tree mesh object analyzing a vector.
+
+    """
+    return vector_unit(v, phase_style=phase_style, error_mean_std=error_mean_std, loss_mean_std=loss_mean_std)[0]
+
+
+def linear_chain(v: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std: Tuple[float, float] = (0., 0.),
+                 loss_mean_std: Tuple[float, float] = (0., 0.)):
+    """Linear chain that analyzes a vector :code:`v`.
+
+    Args:
+        v: Vector unit
+        phase_style: Phase style for the nodes of the mesh.
+        error_mean_std: Split error mean and standard deviation
+        loss_mean_std: Loss error mean and standard deviation (dB)
+
+    Returns:
+        A linear chain mesh object analyzing a vector.
+
+    """
+    return vector_unit(v, phase_style=phase_style, error_mean_std=error_mean_std, loss_mean_std=loss_mean_std,
+                       balanced=False)[0]
 
 
 def dirichlet_matrix(v, embed_dim=None):
