@@ -5,7 +5,7 @@ project_name = "simphox"
 
 setup(
     name=project_name,
-    version="0.0.1a4",
+    version="0.0.1a5",
     packages=find_packages(),
     install_requires=[
         'numpy',

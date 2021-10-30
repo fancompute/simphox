@@ -123,7 +123,7 @@ class ForwardMesh:
             A randomly initialized :code:`s`.
 
         """
-        return betaincinv(self.alpha, self.beta, np.random.rand(self.num_nodes))
+        return betaincinv(self.beta, self.alpha, np.random.rand(self.num_nodes))
 
     def rand_theta(self):
         """Randomly initialized coupling phase :math:`\\theta`.
