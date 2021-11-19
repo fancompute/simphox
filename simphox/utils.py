@@ -7,6 +7,7 @@ import jax.numpy as jnp
 from typing import Tuple, Union, Optional
 from copy import deepcopy
 import xarray as xr
+from scipy.special import beta as beta_func
 
 from .typing import List, Callable, Size2, Size3
 
@@ -223,8 +224,8 @@ def splitter_metrics(sparams: xr.DataArray):
     }
 
 
-def random_vector(n: int, normed: bool = False) -> np.ndarray:
-    """Generate a random complex normal vector.
+def random_vector(n: int, normed: bool = False):
+    """Generate a random complex normal tensor.
 
     Args:
         n: Number of inputs.
@@ -234,8 +235,22 @@ def random_vector(n: int, normed: bool = False) -> np.ndarray:
         The random complex normal vector.
 
     """
-    z = np.array(0.5 * np.random.randn(n) + 0.5 * np.random.randn(n) * 1j)
+    z = random_tensor(n)
     return z / np.linalg.norm(z) if normed else z
+
+
+def random_tensor(size: Union[int, Tuple]) -> np.ndarray:
+    """Generate a random complex normal tensor.
+
+    Args:
+        size: Number of inputs or shape.
+
+    Returns:
+        The random complex normal tens0r.
+
+    """
+    size = (size,) if isinstance(size, int) else size
+    return np.array(0.5 * np.random.randn(*size) + 0.5 * np.random.randn(*size) * 1j)
 
 
 def random_unitary(n: int) -> np.ndarray:
@@ -267,3 +282,12 @@ def normalized_error(u: np.ndarray, use_jax: bool = False):
     xp = jnp if use_jax else np
     u = jnp.array(u) if use_jax else u
     return lambda uhat: xp.sqrt(1 - xp.abs(xp.trace(u.conj().T @ uhat)) ** 2 / xp.abs(xp.trace(uhat.conj().T @ uhat)) ** 2)
+
+
+def beta_pdf(x, a, b):
+    return (x ** (a - 1) * (1 - x) ** (b - 1)) / beta_func(a, b)
+
+
+def beta_phase(theta, a, b):
+    x = np.cos(theta / 2) ** 2
+    return beta_pdf(x, a, b) * np.sin(theta / 2) * np.cos(theta / 2) / np.pi

@@ -67,6 +67,8 @@ class ForwardMesh:
         self.thetas = self.rand_theta()
         self.phis = 2 * np.pi * np.random.rand(self.thetas.size)
         self.gammas = 2 * np.pi * np.random.rand(self.n)
+        self.pn = np.zeros_like(self.thetas)  # only useful for vector units
+        self.pnsn = np.zeros_like(self.thetas)  # only useful for vector units
         self.num_columns = np.max(self.column_by_node) + 1 if len(self.nodes) > 0 else 0
 
     @property

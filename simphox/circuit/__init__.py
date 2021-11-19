@@ -1,4 +1,5 @@
-from .cascade import unitary_unit, vector_unit, tree_cascade, triangular, balanced_tree, linear_chain
+from .matrix import cascade, tree_cascade, triangular, psvd
+from .vector import balanced_tree, unbalanced_tree, vector_unit
 from .forward import ForwardMesh
 from .coupling import CouplingNode
 from .rectangular import rectangular

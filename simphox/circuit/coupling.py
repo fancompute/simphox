@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Union, List
 
 import numpy as np
 from enum import Enum
@@ -87,6 +87,8 @@ class CouplingNode:
 
     def __post_init_post_parse__(self):
         self.stride = self.bottom - self.top
+        self.top_descendants = np.array([])
+        self.bot_descendants = np.array([])
 
     @property
     def mzi_terms(self):
@@ -178,6 +180,11 @@ class CouplingNode:
         mat = self.mzi_node_matrix(theta, phi)
         nullified_vector = mat @ vector
         return nullified_vector, mat, np.mod(theta, 2 * np.pi), np.mod(phi, 2 * np.pi)
+
+    def set_descendants(self, top_descendants: np.ndarray, bot_descendants: np.ndarray):
+        self.top_descendants = top_descendants
+        self.bot_descendants = bot_descendants
+        return self
 
 
 def direct_transmissivity(top: np.ndarray, bottom: np.ndarray):
