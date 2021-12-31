@@ -23,6 +23,7 @@ from ..utils import fix_dataclass_init_docs, normalized_error
 from .coupling import CouplingNode, PhaseStyle, transmissivity_to_phase, direct_transmissivity
 from scipy.special import betaincinv
 
+
 @fix_dataclass_init_docs
 @dataclass
 class ForwardMesh:
@@ -566,3 +567,8 @@ class ForwardMesh:
     @params.setter
     def params(self, params: Tuple[np.ndarray, np.ndarray, np.ndarray]):
         self.thetas, self.phis, self.gammas = params
+
+    def phases(self, error: np.ndarray, constant: bool = False):
+        errors = error if constant else error * np.random.randn(self.thetas.size)
+        g_errors = error if constant else error * np.random.randn(self.gammas.size)
+        return self.thetas + errors, self.phis + errors, self.gammas + g_errors

@@ -151,6 +151,7 @@ def poynting_fn(axis: int = 2, use_jax: bool = False):
         h_cross = xp.stack([(h[ax[0]] + xp.roll(h[ax[0]], shift=1, axis=0)) / 2,
                             (h[ax[1]] + xp.roll(h[ax[1]], shift=1, axis=1)) / 2])
         return e_cross[ax[0]] * h_cross.conj()[ax[1]] - e_cross[ax[1]] * h_cross.conj()[ax[0]]
+
     return poynting
 
 
@@ -249,7 +250,7 @@ def random_tensor(size: Union[int, Tuple]) -> np.ndarray:
         The random complex normal tens0r.
 
     """
-    size = (size,) if isinstance(size, int) else size
+    size = (size,) if np.issubdtype(size, int) else size
     return np.array(0.5 * np.random.randn(*size) + 0.5 * np.random.randn(*size) * 1j)
 
 
@@ -281,7 +282,8 @@ def normalized_error(u: np.ndarray, use_jax: bool = False):
 
     xp = jnp if use_jax else np
     u = jnp.array(u) if use_jax else u
-    return lambda uhat: xp.sqrt(1 - xp.abs(xp.trace(u.conj().T @ uhat)) ** 2 / xp.abs(xp.trace(uhat.conj().T @ uhat)) ** 2)
+    return lambda uhat: xp.sqrt(
+        1 - xp.abs(xp.trace(u.conj().T @ uhat)) ** 2 / xp.abs(xp.trace(uhat.conj().T @ uhat)) ** 2)
 
 
 def beta_pdf(x, a, b):
@@ -291,3 +293,57 @@ def beta_pdf(x, a, b):
 def beta_phase(theta, a, b):
     x = np.cos(theta / 2) ** 2
     return beta_pdf(x, a, b) * np.sin(theta / 2) * np.cos(theta / 2) / np.pi
+
+
+def gaussian_fft(profiles: np.ndarray, pulse_width: float, center_wavelength: float, dt: float,
+                 t0: float = None, linear_chirp: float = 0):
+    """Gaussian FFT for measurement.
+
+    Args:
+        profiles: profiles measured over time
+        pulse_width: Gaussian pulse width
+        center_wavelength: center wavelength
+        dt: time step size
+        t0: peak time (default to be central time step)
+        linear_chirp: linear chirp coefficient (default to be 0)
+
+    Returns:
+        the Gaussian source discretized in time
+
+    """
+    k0 = 2 * np.pi / center_wavelength
+    t = np.arange(profiles.shape[0]) * dt
+    t0 = t[t.size // 2] if t0 is None else t0
+    g = np.fft.fft(np.exp(1j * k0 * (t - t0)) * np.exp((-pulse_width + 1j * linear_chirp) * (t - t0) ** 2))
+    return np.fft.ifft(g * profiles, axis=0)
+
+
+def gaussian_fn(wavelength: float, pulse_width: float = 0, fwidth: float = np.inf,
+                start_time: float = 0, center_time_factor: float = 5.0, linear_chirp: float = 0):
+    """A Gaussian function for sources.
+
+    Args:
+        wavelength: The carrier wavelength for the electromagnetic radiation.
+        pulse_width: The Gaussian envelope pulse width :math:`w` in wavelength units.
+        fwidth: The Gaussian envelope pulse width in :math:`w_f = 2 \\pi / w` frequency units.
+        start_time: The start time for the Gaussian.
+        center_time_factor: Decide the time :math:`t_0`: to center the Gaussian,
+            such that :code:`t0 = center_factor * k0`.
+        linear_chirp: linear chirp coefficient (default to be 0)
+
+    Returns:
+
+    """
+    if pulse_width <= 0 and pulse_width == np.inf:
+        raise ValueError("Bandwidth must be positive or fwidth must be noninfinite.")
+
+    fwidth = 2 * np.pi / pulse_width if pulse_width > 0 else fwidth
+    pulse_width = 2 * np.pi / fwidth
+    k0 = 2 * np.pi / wavelength
+    t0 = start_time + pulse_width * center_time_factor
+
+    def _gaussian(t):
+        return np.exp(1j * k0 * (t - t0)) * np.exp((-fwidth + 1j * linear_chirp) * (t - t0) ** 2)\
+            if t > start_time else 0
+
+    return _gaussian

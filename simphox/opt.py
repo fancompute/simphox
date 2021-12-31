@@ -191,8 +191,7 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
 
     for i in iterator:
         v, opt_state, data = step(i, opt_state)
-        if viz_interval > 0 and i % viz_interval == 0:
-            _update_eps(opt_state)
+        _update_eps(opt_state)
         for sop, sparams_fields in zip(sim_opt_problems, data):
             sim = sop.sim
             sparams, e, h = sim.decorate(*sparams_fields)
@@ -225,7 +224,7 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
             if field_interval > 0 and i % field_interval == 0:
                 history[f'field/{sop.sim.name}'].append((i, hz.T))
         iterator.set_description(f"𝓛: {v:.5f}")
-        costs.append(v)
+        costs.append(jax.lax.stop_gradient(v))
         if viz is not None:
             viz.costs_pipe.send(np.asarray(costs))
     _update_eps(opt_state)

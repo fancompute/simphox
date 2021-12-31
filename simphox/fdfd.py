@@ -261,8 +261,7 @@ class FDFD(SimGrid):
     @classmethod
     def from_pattern(cls, component: "Pattern", core_eps: float, clad_eps: float, spacing: float, boundary: Size,
                      pml: float, wavelength: float, component_t: float = 0, component_zmin: Optional[float] = None,
-                     rib_t: float = 0, sub_z: float = 0, height: float = 0, bg_eps: float = 1, smooth_feature: float = 0,
-                     name: str = 'fdfd'):
+                     rib_t: float = 0, sub_z: float = 0, height: float = 0, bg_eps: float = 1, name: str = 'fdfd'):
         """Initialize an FDFD from a Pattern defined in DPhox.
 
         Args:
@@ -279,7 +278,6 @@ class FDFD(SimGrid):
             component_t: component thickness
             rib_t: rib thickness for component (partial etch)
             bg_eps: background epsilon (usually 1 or air/vacuum)
-            smooth_feature: erode, dilate twice, erode to smooth out any existing component features
             name: Name of the component
 
         Returns:
@@ -297,7 +295,7 @@ class FDFD(SimGrid):
         grid = cls(size, spacing, wavelength=wavelength, eps=bg_eps, pml=pml, name=name)
         grid.fill(sub_z + rib_t, core_eps)
         grid.fill(sub_z, clad_eps)
-        grid.add(component, core_eps, component_zmin, component_t, smooth_feature=smooth_feature)
+        grid.add(component, core_eps, component_zmin, component_t)
         return grid
 
     def sparams(self, port_name: str, mode_idx: int = 0, measure_info: Optional[Dict[str, List[int]]] = None):
@@ -362,7 +360,7 @@ class FDFD(SimGrid):
                 x_ind, y_ind = operator.x_indices, operator.y_indices
                 dh = self.diff_fn(of_h=True, use_jax=True)
 
-                @jax.jit
+                # @jax.jit
                 def solve(rho: jnp.ndarray):
                     eps_t = yee_avg_jax(transform_fn(rho).reshape(self.shape3))
                     eps_x, eps_y = jnp.ravel(eps_t[0]), jnp.ravel(eps_t[1])
@@ -383,7 +381,7 @@ class FDFD(SimGrid):
                 mat_indices = jnp.hstack((jnp.vstack((jnp.arange(self.n), jnp.arange(self.n))), ddz_indices))
                 de = self.diff_fn(of_h=False, use_jax=True)
 
-                @jax.jit
+                # @jax.jit
                 def solve(rho: jnp.ndarray):
                     eps = yee_avg_2d_z(transform_fn(rho).reshape(shape3)).ravel()
                     mat_entries = jnp.hstack((-eps * k0 ** 2, ddz_entries))
@@ -400,7 +398,7 @@ class FDFD(SimGrid):
             def op(eps: jnp.ndarray):
                 return lambda b: curl_h(curl_e(b.reshape(field_shape))) - k0 ** 2 * eps * b.reshape(field_shape)
 
-            @jax.jit
+            # @jax.jit
             def solve(rho: jnp.ndarray):
                 eps = yee_avg_jax(transform_fn(rho))
                 e, _ = bicgstab(op(eps), k0 * src.reshape(field_shape))

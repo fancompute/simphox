@@ -20,6 +20,13 @@ try:
 except ImportError:
     HOLOVIEWS_IMPORTED = False
 
+try:
+    from dphox.pattern import Pattern
+
+    DPHOX_INSTALLED = True
+except ImportError:
+    DPHOX_INSTALLED = False
+
 import dataclasses
 import xarray as xr
 
@@ -32,14 +39,8 @@ class SimCrossSection:
     size: Tuple[float, float, float]
     wavelength: float
 
-    def place(self, mode_idx, grid) -> np.ndarray:
+    def place(self, mode_idx: int, grid: YeeGrid) -> np.ndarray:
         return self.io.place(mode_idx, grid, self.center, self.size)
-
-    def gaussian(self):
-        raise NotImplementedError
-
-    def cw(self):
-        raise NotImplementedError
 
 
 class SimGrid(YeeGrid):
@@ -210,7 +211,8 @@ class SimGrid(YeeGrid):
                 for name, p in self.port.items()}
 
     def port_source(self, source: Optional[Union[Dict[Tuple[str, int], float], Dict[str, float]]] = None,
-                    profile_size_factor: float = 3, unidirectional: bool = True, wavelength: float = 1.55) -> np.ndarray:
+                    profile_size_factor: float = 3, unidirectional: bool = True,
+                    wavelength: float = 1.55) -> np.ndarray:
         """Return a non-sparse source array based on the ports defined in the simulation grid.
 
         Args:
@@ -326,7 +328,7 @@ class SimGrid(YeeGrid):
         fields_fn = self.get_fields_fn(src, transform_fn, tm_2d=tm_2d)
         measure_fn = self.get_measure_fn(use_jax=True, tm_2d=tm_2d)
 
-        @jax.jit
+        # @jax.jit
         def sim_fn(rho: jnp.ndarray):
             fields = fields_fn(rho)
             measurements = measure_fn(fields)
@@ -364,7 +366,7 @@ class SimGrid(YeeGrid):
         measure_fn = self.get_measure_fn(use_jax=True, tm_2d=tm_2d)
         port_idx = measure_info.index(source_info)
 
-        @jax.jit
+        # @jax.jit
         def sim_fn(rho: jnp.ndarray):
             fields = fields_fn(rho)
             s_out, s_in = measure_fn(fields)
@@ -536,7 +538,8 @@ class SimGrid(YeeGrid):
             def obj(sparams_fields: Tuple[jnp.ndarray, jnp.ndarray]):
                 sparams, fields = sparams_fields
                 insertion_sqrt = jnp.linalg.norm(sparams)
-                cost = -jnp.abs(s @ (sparams / insertion_sqrt)) ** 2 * (1 - insertion_weight) - insertion_sqrt ** 2 * insertion_weight
+                cost = -jnp.abs(s @ (sparams / insertion_sqrt)) ** 2 * (
+                            1 - insertion_weight) - insertion_sqrt ** 2 * insertion_weight
                 return cost, jax.lax.stop_gradient((sparams, fields))
         else:
             def obj(sparams_fields: Tuple[jnp.ndarray, jnp.ndarray]):

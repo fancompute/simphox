@@ -238,6 +238,7 @@ def hessian_vector_unit(v: np.ndarray, balanced: bool = True):
 
 def hessian_fd(v: np.ndarray, error=0.0001, balanced=False):
     """Compute the Hessian for a vector unit if size code:`n` using finite differences.
+    This is mostly useful for testing, but it takes way too long in practice.
 
     The finite difference evaluation is given by the central differencing scheme:
     .. math::

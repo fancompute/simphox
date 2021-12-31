@@ -8,6 +8,12 @@ from .grid import YeeGrid
 from .typing import Shape, Spacing, Optional, Union, Source, State, Size3, Size
 from .utils import pml_params, curl_fn, yee_avg
 
+try:
+    from dphox.pattern import Pattern
+    DPHOX_INSTALLED = True
+except ImportError:
+    DPHOX_INSTALLED = False
+
 
 class FDTD(YeeGrid):
     """Stateless Finite Difference Time Domain (FDTD) implementation.
@@ -26,7 +32,7 @@ class FDTD(YeeGrid):
     """
 
     def __init__(self, size: Size, spacing: Spacing, eps: Union[float, np.ndarray] = 1,
-                 pml: Optional[Union[Shape, Size]] = None, pml_params: Size3 = (3, -35, 1),
+                 pml: Optional[Union[Shape, Size, float]] = None, pml_params: Size3 = (3, -35, 1),
                  pml_sep: int = 5, use_jax: bool = True, name: str = 'fdtd'):
         super(FDTD, self).__init__(size, spacing, eps, pml=pml, pml_params=pml_params, pml_sep=pml_sep, name=name)
         self.dt = 1 / np.sqrt(np.sum(1 / self.spacing ** 2))  # includes courant condition!
@@ -59,7 +65,47 @@ class FDTD(YeeGrid):
         self._curl_e = self.curl_fn(use_jax=self.use_jax)
         self._curl_h = self.curl_fn(of_h=True, use_jax=self.use_jax)
 
-        raise NotImplementedError("This class is still WIP")
+        # raise NotImplementedError("This class is still WIP")
+
+
+    @classmethod
+    def from_pattern(cls, component: "Pattern", core_eps: float, clad_eps: float, spacing: float, boundary: Size,
+                     pml: float, component_t: float = 0, component_zmin: Optional[float] = None,
+                     rib_t: float = 0, sub_z: float = 0, height: float = 0, bg_eps: float = 1, name: str = 'fdfd'):
+        """Initialize an FDFD from a Pattern defined in DPhox.
+
+        Args:
+            component: component provided by DPhox
+            core_eps: core epsilon (in the pattern region_
+            clad_eps: clad epsilon
+            spacing: spacing required
+            boundary: boundary size around component
+            pml: PML boundary size
+            height: height for 3d simulation
+            sub_z: substrate minimum height
+            component_zmin: component height (defaults to substrate_z)
+            component_t: component thickness
+            rib_t: rib thickness for component (partial etch)
+            bg_eps: background epsilon (usually 1 or air/vacuum)
+            name: Name of the component
+
+        Returns:
+            A Grid object for the component
+
+        """
+        if not DPHOX_INSTALLED:
+            raise ImportError('DPhox not installed, but it is required to run this function.')
+        b = component.size
+        x = b[0] + 2 * boundary[0]
+        y = b[1] + 2 * boundary[1]
+        component_zmin = sub_z if component_zmin is None else component_zmin
+        spacing = spacing * np.ones(2 + (component_t > 0)) if isinstance(spacing, float) else np.asarray(spacing)
+        size = (x, y, height) if height > 0 else (x, y)
+        grid = cls(size, spacing, eps=bg_eps, pml=pml, name=name)
+        grid.fill(sub_z + rib_t, core_eps)
+        grid.fill(sub_z, clad_eps)
+        grid.add(component, core_eps, component_zmin, component_t)
+        return grid
 
     @property
     def zero_state(self) -> State:

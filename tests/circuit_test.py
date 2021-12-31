@@ -5,7 +5,7 @@ import pytest
 from scipy.stats import unitary_group
 
 from simphox.circuit import cascade, vector_unit, rectangular, balanced_tree
-from simphox.circuit.vector import tree, hessian_fd, hessian_vector_unit
+from simphox.circuit.vector import tree, hessian_fd, hessian_vector_unit, PhaseStyle
 from simphox.utils import random_vector
 
 import copy
@@ -40,10 +40,10 @@ def test_tree_network(n: int, balanced: bool, expected_node_idxs: np.ndarray, ex
 
 
 @pytest.mark.parametrize(
-    "v, balanced",
-    product(RAND_VECS, [True, False])
+    "v, balanced, phase_style",
+    product(RAND_VECS, [True, False], [PhaseStyle.TOP, PhaseStyle.BOTTOM])
 )
-def test_vector_configure(v: np.ndarray, balanced: bool):
+def test_vector_configure(v: np.ndarray, balanced: bool, phase_style: PhaseStyle):
     circuit, _ = vector_unit(v, balanced=balanced)
     res = circuit.matrix_fn(use_jax=False)(circuit.params) @ v
     np.testing.assert_allclose(res, np.eye(v.size)[v.size - 1], atol=1e-10)
