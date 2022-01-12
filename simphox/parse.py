@@ -14,7 +14,7 @@ def parse_excitation(excitation: Excitation):
     if isinstance(excitation, str):
         return [(excitation, 0)]
     elif isinstance(excitation, tuple) or isinstance(excitation, list):
-        if isinstance(excitation[0], str) and isinstance(excitation[1], int) and len(excitation) == 2:
+        if (isinstance(excitation[0], str) or isinstance(excitation[0], int)) and isinstance(excitation[1], int) and len(excitation) == 2:
             return [excitation]
         return sum([parse_excitation(mi) for mi in excitation], [])
     elif isinstance(excitation, dict):

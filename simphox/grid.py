@@ -455,8 +455,8 @@ class YeeGrid(Grid):
 
         """
         x, y, z = loc
-        pml = (self.pml_shape + self.pml_sep) * self.spacing if self.pml_shape is not None else self.spacing[:2]
-        maxx, maxy = self.size[:2] - self.spacing[:2]
+        pml = (self.pml_shape + self.pml_sep) * self.spacing if self.pml_shape is not None else (0, 0)
+        maxx, maxy = self.size[:2]
         new_x = min(max(x, pml[0]), maxx - pml[0])
         new_y = min(max(y, pml[1]), maxy - pml[1])
         return new_x, new_y, z

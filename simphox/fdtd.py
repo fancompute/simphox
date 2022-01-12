@@ -73,7 +73,7 @@ class FDTD(SimGrid):
         self._curl_e = self.curl_fn(use_jax=self.use_jax)
         self._curl_h = self.curl_fn(of_h=True, use_jax=self.use_jax)
 
-        raise NotImplementedError("This class is still WIP")
+        # raise NotImplementedError("This class is still WIP")
 
     @classmethod
     def from_pattern(cls, component: "Pattern", core_eps: float, clad_eps: float, spacing: float, boundary: Size,
@@ -143,7 +143,7 @@ class FDTD(SimGrid):
         # update pml in pml regions if specified
         phi_e = []
         for pml_idx, pml_region in enumerate(self.pml_regions):
-            psi_e[pml_idx], p = self._curl_h_pml[pml_idx](h, psi_e[pml_idx], self.cpml_b[pml_idx][1])
+            psi_e[pml_idx], p = self._curl_h_pml[pml_idx](h[pml_region], psi_e[pml_idx], self.cpml_b[pml_idx][1])
             phi_e.append(p)
 
         # update e field
@@ -170,7 +170,7 @@ class FDTD(SimGrid):
         # update h field in pml regions if specified
         phi_h = []
         for pml_idx, pml_region in enumerate(self.pml_regions):
-            psi_h[pml_idx], p = self._curl_e_pml[pml_idx](e, psi_h[pml_idx], self.cpml_b[pml_idx][0])
+            psi_h[pml_idx], p = self._curl_e_pml[pml_idx](e[pml_region], psi_h[pml_idx], self.cpml_b[pml_idx][0])
             phi_h.append(p)
 
         # update h field
@@ -330,13 +330,13 @@ class FDTD(SimGrid):
     def curl_e_pml(self, pml_idx: int) -> Callable[[Array, Array, Array], Array]:
         dx, _ = self._dxes
         c, s = self.cpml_c[pml_idx][0], self.pml_regions[pml_idx][1:]
-        de = lambda e, ax: c[ax] * (self.xp.roll(e, -1, axis=ax)[s] - e[s]) / dx[ax][s]
+        de = lambda e, ax: c[ax] * (self.xp.roll(e, -1, axis=ax) - e) / dx[ax][s]
         return curl_pml_fn(de, use_jax=self.use_jax)
 
     def curl_h_pml(self, pml_idx: int) -> Callable[[Array, Array, Array], Array]:
         _, dx = self._dxes
         c, s = self.cpml_c[pml_idx][1], self.pml_regions[pml_idx][1:]
-        dh = lambda h, ax: c[ax] * (h[s] - self.xp.roll(h, 1, axis=ax)[s]) / dx[ax][s]
+        dh = lambda h, ax: c[ax] * (h - self.xp.roll(h, 1, axis=ax)) / dx[ax][s]
         return curl_pml_fn(dh, use_jax=self.use_jax)
 
     @property

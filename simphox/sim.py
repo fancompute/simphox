@@ -216,6 +216,7 @@ class SimGrid(YeeGrid):
         """
         # Set up the port profiles for measurement at each port (by default assumes single mode waveguides)
         measure_port = self.parse_excitation(measure_port)
+        print(measure_port)
         port_to_modes = self.port_modes(measure_port, profile_size_factor, wavelength)
         ports = port_to_modes.keys()
         port_nums = np.arange(len(ports))
