@@ -197,13 +197,15 @@ class ForwardMesh:
         t22 = np.sin(np.pi / 4 + errors)
         return insertion * np.array([t11, t12, t21, t22])
 
-    def parallel_mzi_fn(self, use_jax: bool = False, back: bool = False):
+    def parallel_mzi_fn(self, use_jax: bool = False, back: bool = False,
+                        mzi_terms: np.ndarray = None):
         """This is a helper function for finding the matrix elements for MZIs in parallel,
         leading to significant speedup.
 
         Args:
             use_jax: Whether to use jax.
             back: Go backward through the MZIs
+            mzi_terms:
 
         Returns:
             A function that accepts the thetas and phis as inputs and outputs the vectorized
@@ -214,7 +216,7 @@ class ForwardMesh:
         xp = jnp if use_jax else np
 
         # stands for cos-cos, cos-sin, sin-cos, sin-sin terms.
-        cc, cs, sc, ss = self.mzi_terms
+        cc, cs, sc, ss = self.mzi_terms if mzi_terms is None else mzi_terms.T[(self.node_idxs,)].T
 
         # insertion (assume a fixed loss that is global for each node)
         insertion = 1 - self.losses
@@ -251,8 +253,7 @@ class ForwardMesh:
             raise ValueError(f"Phase style {self.phase_style} is not valid.")
         return jit(parallel_mzi) if use_jax else parallel_mzi
 
-    def matrix_fn(self, use_jax: bool = False, inputs: Optional[np.ndarray] = None,
-                  back: bool = False):
+    def matrix_fn(self, inputs: Optional[np.ndarray] = None, use_jax: bool = False, back: bool = False):
         """Return a function that returns the matrix representation of this circuit.
 
         The coupling circuit is a photonic network aligned with :math:`N` waveguide rails.
@@ -556,8 +557,8 @@ class ForwardMesh:
             phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
         else:
             theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
-            phi = np.angle(bottom[:, -1]) - np.angle(top[:, -1]) + np.pi
-            phi -= np.angle(-ss + cc * np.exp(1j * theta)) - np.angle(1j * (cs + np.exp(1j * theta) * sc))
+            phi = np.angle(bottom[:, -1]) - np.angle(top[:, -1])
+            phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
         return theta, phi
 
     @property
@@ -568,7 +569,18 @@ class ForwardMesh:
     def params(self, params: Tuple[np.ndarray, np.ndarray, np.ndarray]):
         self.thetas, self.phis, self.gammas = params
 
-    def phases(self, error: np.ndarray, constant: bool = False):
+    def phases(self, error: np.ndarray = 0, constant: bool = False, gamma_error: bool = False):
+        """
+
+        Args:
+            error: Error in the phases.
+            constant: Whether the phase error should be constant.
+            gamma_error: The error in gamma (output phases).
+
+        Returns:
+            The phases
+
+        """
         errors = error if constant else error * np.random.randn(self.thetas.size)
         g_errors = error if constant else error * np.random.randn(self.gammas.size)
-        return self.thetas + errors, self.phis + errors, self.gammas + g_errors
+        return self.thetas + errors, self.phis + errors, self.gammas + g_errors * gamma_error

@@ -119,8 +119,6 @@ class FDFD(SimGrid):
             name=simgrid.name
         )
         fdfd.port = simgrid.port
-        fdfd.port_thickness = simgrid.port_thickness
-        fdfd.port_height = simgrid.port_height
         return fdfd
 
     @property
@@ -266,7 +264,7 @@ class FDFD(SimGrid):
 
         Args:
             component: component provided by DPhox
-            core_eps: core epsilon (in the pattern region_
+            core_eps: core epsilon (in the pattern region)
             clad_eps: clad epsilon
             spacing: spacing required
             boundary: boundary size around component
@@ -302,7 +300,7 @@ class FDFD(SimGrid):
         """Measure sparams using a port profile provided for a given port and mode index.
 
         Args:
-            port_name: The port name for the sparams to measure.
+            port_name: The source port name for the sparams to measure.
             mode_idx: Mode index to access for the source.
             measure_info: A list of :code:`port_name`, :code:`mode_idx` to get mode measurements at each port.
 
@@ -427,12 +425,12 @@ class FDFD(SimGrid):
         wavelength = self.wavelength if wavelength is None else wavelength
         return FDFD.from_simgrid(super(FDFD, self).to_2d(wavelength, tm=tm), wavelength)
 
-    def tfsf_profile(self, q_mask: np.ndarray, wavelength: float, k: Size):
+    def tfsf_profile(self, q_mask: np.ndarray, k: Size, wavelength: float = None):
         mask = q_mask
         q = sp.diags(mask.flatten())
-        period = wavelength  # equivalent to period since c = 1!
-        k0 = 2 * np.pi / period
-        k = np.asarray(k) / (np.sum(k)) * k0
+        wavelength = self.wavelength if wavelength is None else wavelength
+        k0 = 2 * np.pi / wavelength
+        k = np.asarray(k) / np.sum(k) * k0
         fsrc = np.einsum('i,j,k->ijk', np.exp(1j * self.pos[0][:-1] * k[0]),
                          np.exp(1j * self.pos[1][:-1] * k[1]),
                          np.exp(1j * self.pos[2][:-1] * k[2])).flatten()

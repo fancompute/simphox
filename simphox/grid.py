@@ -85,8 +85,6 @@ class Grid:
 
         # used to handle special functions of waveguide-based components
         self.port: Dict[str, Port] = {}
-        self.port_thickness = 0
-        self.port_height = 0
 
     def fill(self, height: float, eps: float) -> "Grid":
         """Fill grid up to `height`, typically used for substrate + cladding epsilon settings
@@ -146,7 +144,7 @@ class Grid:
         """
         s = self.slice(center, size, squeezed=True)
         eps_3d = self.eps.reshape(self.shape3)
-        eps_3d[s[0], s[1], s[2]] = eps
+        eps_3d[s] = eps
         self.eps = eps_3d.squeeze()
         return self
 
@@ -164,7 +162,7 @@ class Grid:
         """
         s = self.slice(center, size, squeezed=True)
         mask = np.zeros(self.shape3)
-        mask[s[0], s[1], s[2]] = 1
+        mask[s] = 1
         return mask.squeeze()
 
     def reshape(self, v: np.ndarray) -> np.ndarray:
@@ -256,7 +254,7 @@ class Grid:
                  field[axes[1]].reshape(self.shape3),
                  field[axes[2]].reshape(self.shape3))
             )  # orient the field by axis (useful for mode calculation)
-            return oriented_field[:, s[0], s[1], s[2]].transpose(0, *(1 + axes))
+            return oriented_field[:, s[0], s[1], s[2]].transpose((0, *tuple(1 + axes)))
 
         return view
 
@@ -457,8 +455,8 @@ class YeeGrid(Grid):
 
         """
         x, y, z = loc
-        pml = (self.pml_shape + self.pml_sep) * self.spacing if self.pml_shape is not None else (0, 0)
-        maxx, maxy = self.size[:2]
+        pml = (self.pml_shape + self.pml_sep) * self.spacing if self.pml_shape is not None else self.spacing[:2]
+        maxx, maxy = self.size[:2] - self.spacing[:2]
         new_x = min(max(x, pml[0]), maxx - pml[0])
         new_y = min(max(y, pml[1]), maxy - pml[1])
         return new_x, new_y, z

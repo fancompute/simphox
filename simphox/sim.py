@@ -6,7 +6,9 @@ import jax.numpy as jnp
 
 from .grid import YeeGrid
 from .mode import ModeSolver, ModeLibrary
-from .typing import Spacing, Shape, Union, Size, Optional, List, Tuple, Shape2, Size2, Dict, Size3, Callable, \
+from .parse import parse_excitation
+from .typing import Excitation, Spacing, Shape, Union, Size, Optional, List, Tuple, Shape2, Size2, Dict, Size3, \
+    Callable, \
     MeasureInfo, Op, PortLabel
 from .utils import fix_dataclass_init_docs
 from .viz import get_extent_2d
@@ -35,12 +37,57 @@ import xarray as xr
 @dataclasses.dataclass
 class SimCrossSection:
     io: ModeLibrary
-    center: Tuple[float, float, float]
-    size: Tuple[float, float, float]
+    center: Size
+    size: Size
     wavelength: float
 
     def place(self, mode_idx: int, grid: YeeGrid) -> np.ndarray:
         return self.io.place(mode_idx, grid, self.center, self.size)
+
+    def slice(self, grid: YeeGrid):
+        return (slice(None),) + grid.slice(self.center, self.size)
+
+    @property
+    def prop_axis(self) -> int:
+        """The propagation axis (the poynting direction where the port slice size should be 0)
+
+        Returns:
+            The propagation axis for the mode in the simulation cross section.
+        """
+        # Find
+        return np.where(np.array(self.size) == 0)[0][0]
+
+    def profile(self, mode_idx: int, use_h: float = False):
+        """Returns the mode profile oriented based on specified xyz size of the profile.
+
+        Args:
+            mode_idx: The mode index of the profile
+            use_h: Return the h field for the profile
+
+        Returns:
+            The oriented profile.
+
+        """
+        # Find the reorientation of field axes based on place_axis
+        # 0: (0, 1, 2) -> (2, 0, 1)
+        # 1: (0, 1, 2) -> (0, 2, 1)
+        # 2: (0, 1, 2) -> (0, 1, 2)
+        axes = [
+            np.asarray((2, 0, 1), dtype=int),
+            np.asarray((0, 2, 1), dtype=int),
+            np.asarray((0, 1, 2), dtype=int)
+        ][self.prop_axis]
+
+        signs = [
+            np.asarray((1, -1, 1), dtype=int),
+            np.asarray((1, 1, 1), dtype=int),
+            np.asarray((1, 1, -1), dtype=int)
+        ][self.prop_axis]
+
+        mode = self.io.h(mode_idx) if use_h else self.io.e(mode_idx)
+        mode = np.stack([signs[0] * mode[axes[0]], signs[1] * mode[axes[1]], signs[2] * mode[axes[2]]])
+
+        return mode.transpose((0, *tuple(1 + axes)))
 
 
 class SimGrid(YeeGrid):
@@ -85,109 +132,6 @@ class SimGrid(YeeGrid):
         )
         return SimCrossSection(modes, center, size, wavelength)
 
-    # def mode_source(self, center: Size, size: Size, wavelength: float = 1.55, mode_idx: int = 0):
-    #     """For waveguide-related problems or shining light into a photonic port, an eigenmode source is used.
-    #
-    #     Args:
-    #         center: center tuple of the form :code:`(x, y, z)`
-    #         size: size of the source
-    #         wavelength: wavelength (arb. units, should match with spacing)
-    #         mode_idx: mode index for the eigenmode for source profile
-    #
-    #     Returns:
-    #         Eigenmode source function and region (:code:`slice` object or mask).
-    #     """
-    #     sim_xs = self.modes(center, size, wavelength, num_modes=mode_idx + 1)
-    #     return cw_source_fn(profile, wavelength, gpu), region
-
-    # def cw_source(self, profile: np.ndarray, wavelength: float, t: float, dt: float) -> np.ndarray:
-    #     """CW source array
-    #
-    #     Args:
-    #         profile: Profile :math:`\mathbf{\\Psi}`
-    #         wavelength: Wavelength :mode:`\\lambda`
-    #         t: total "on" time
-    #         dt: time step size
-    #
-    #     Returns:
-    #         CW source as an ndarray of size :code:`[t/dt, *source_shape]`
-    #
-    #     """
-    #     return source(cw_source_fn(profile, wavelength), t, dt)
-    #
-    # def source(self, source_fn: Callable[[float], np.ndarray], t: float, dt: float) -> np.ndarray:
-    #     """Source array given a source function
-    #
-    #     Args:
-    #         source_fn: Source function
-    #         t: total "on" time
-    #         dt: time step size
-    #
-    #     Returns:
-    #         ndarray of size :code:`[t/dt, *source_shape]`
-    #
-    #     """
-    #     ts = np.linspace(0, t, int(t // dt) + 1)
-    #     return np.asarray([source_fn(t) for t in ts])  # not the most efficient, but it'll do for now
-    #
-    # def cw_source_fn(self, profile: np.ndarray, wavelength: float) -> Callable[[float], np.ndarray]:
-    #     """CW source function
-    #
-    #     Args:
-    #         profile: Profile :math:`\mathbf{\\Psi}` (e.g. mode or TFSF) for the input source
-    #         wavelength: Wavelength for CW source
-    #         gpu: place source on the gpu
-    #
-    #     Returns:
-    #         the CW source function of time
-    #
-    #     """
-    #     profile = jnp.asarray(profile) if self.use_jax else profile
-    #     xp = jnp if self.use_jax else np
-    #     return lambda t: profile * xp.exp(-1j * 2 * xp.pi * t / wavelength)
-    #
-    # def gaussian_source(self, profiles: np.ndarray, pulse_width: float, center_wavelength: float, dt: float,
-    #                     t0: float = None, linear_chirp: float = 0) -> np.ndarray:
-    #     """Gaussian source array
-    #
-    #     Args:
-    #         profiles: profiles defined at individual frequencies
-    #         pulse_width: Gaussian pulse width
-    #         center_wavelength: center wavelength
-    #         dt: time step size
-    #         t0: peak time (default to be central time step)
-    #         linear_chirp: linear chirp coefficient (default to be 0)
-    #
-    #     Returns:
-    #         the Gaussian source discretized in time
-    #
-    #     """
-    #     k0 = 2 * np.pi / center_wavelength
-    #     t = np.arange(profiles.shape[0]) * dt
-    #     t0 = t[t.size // 2] if t0 is None else t0
-    #     g = np.fft.fft(np.exp(1j * k0 * (t - t0)) * np.exp((-pulse_width + 1j * linear_chirp) * (t - t0) ** 2))
-    #     src = np.fft.ifft(g * profiles, axis=0)
-    #     return jnp.asarray(src) if self.use_jax else src
-    #
-    # def gaussian_source_fn(self, profiles: np.ndarray, pulse_width: float, center_wavelength: float, dt: float,
-    #                        t0: float = None, linear_chirp: float = 0) -> Callable[[float], np.ndarray]:
-    #     """Gaussian source function
-    #
-    #     Args:
-    #         profiles: profiles defined at individual frequencies
-    #         pulse_width: pulse width at individual frequencies
-    #         center_wavelength: center wavelength
-    #         dt: time step size
-    #         t0: peak time (default to be central time step)
-    #         linear_chirp: linear chirp coefficient (default to be 0)
-    #
-    #     Returns:
-    #         the Gaussian source function of time
-    #
-    #     """
-    #     src = self.gaussian_source(profiles, pulse_width, center_wavelength, dt, t0, linear_chirp)
-    #     return lambda tt: src[tt // dt]
-
     def port_modes(self, excitation: List[Tuple[str, int]] = None,
                    profile_size_factor: float = 3, wavelength: float = 1.55) -> Dict[PortLabel, SimCrossSection]:
         """Profile for all the ports in the grid (always assumed to be along x or y axes!).
@@ -203,12 +147,15 @@ class SimGrid(YeeGrid):
 
         """
 
-        excitation = [(port, 0) for port in self.port] if excitation is None else excitation
-        return {name: self.modes(center=self.pml_safe_placement(p.xyz), size=tuple(p.size * profile_size_factor),
-                                 num_modes=np.max([mode_idx
-                                                   for port_name, mode_idx in excitation if port_name == name]) + 1,
+        excitation = self.parse_excitation(excitation)
+        port_names = {e[0] for e in excitation}
+        num_modes = {name: np.max([mode_idx for port_name, mode_idx in excitation if port_name == name]) + 1
+                     for name in port_names}
+        return {name: self.modes(center=self.pml_safe_placement(self.port[name].xyz),
+                                 size=tuple(self.port[name].size * profile_size_factor),
+                                 num_modes=num_modes[name],
                                  wavelength=wavelength)
-                for name, p in self.port.items()}
+                for name in port_names}
 
     def port_source(self, source: Optional[Union[Dict[Tuple[str, int], float], Dict[str, float]]] = None,
                     profile_size_factor: float = 3, unidirectional: bool = True,
@@ -238,7 +185,7 @@ class SimGrid(YeeGrid):
         sources_to_sum = []
         for port_mode, weight in source.items():
             port, mode = port_mode
-            axis = int(np.mod(self.port[port].a, np.pi) == np.pi / 2)
+            axis = source_library[port].prop_axis
             beta = source_library[port].io.betas[mode]
             shift = 2 * (np.mod(self.port[port].a, 360) < 180) - 1
             src = source_library[port].place(mode, self) * weight
@@ -249,12 +196,16 @@ class SimGrid(YeeGrid):
 
         return sum(sources_to_sum) if sources_to_sum else np.array([])
 
-    def get_measure_fn(self, measure_info: Optional[MeasureInfo] = None,
+    def parse_excitation(self, excitation: Optional[Excitation] = None):
+        return [(port, 0) for port in self.port] if excitation is None else parse_excitation(excitation)
+
+    def get_measure_fn(self, measure_port: Optional[Excitation] = None, wavelength: float = 1.55,
                        profile_size_factor: float = 3, use_jax: bool = False, tm_2d: bool = True) -> Op:
         """Measure function: measure the fields using the Modes object provided for each port.
 
         Args:
-            measure_info: List of port name and mode index at that port.
+            measure_port: List of port name and mode index at that port.
+            wavelength: The wavelength for the measurement.
             profile_size_factor: Factor to rescale the mode view slice compared to the port.
             use_jax: Whether to use jax in the measure function (relevant for simulations).
             tm_2d: Whether to use TM polarization (applies to the 2D case only).
@@ -264,8 +215,8 @@ class SimGrid(YeeGrid):
 
         """
         # Set up the port profiles for measurement at each port (by default assumes single mode waveguides)
-        measure_info = [(name, 0) for name in self.port] if measure_info is None else measure_info
-        port_to_modes = self.port_modes(measure_info, profile_size_factor)
+        measure_port = self.parse_excitation(measure_port)
+        port_to_modes = self.port_modes(measure_port, profile_size_factor, wavelength)
         ports = port_to_modes.keys()
         port_nums = np.arange(len(ports))
         angles = [self.port[port].a for port in ports]
@@ -273,9 +224,9 @@ class SimGrid(YeeGrid):
         # to determine whether the wave is entering or leaving the device
         # The polarity below assumes that ports are near edge of simulation.
         polarity = 2 * (np.mod(angles, 360) < 180).astype(int) - 1
-        measure_fns = [port_to_modes[port_name].io.measure_fn(m, use_jax, tm_2d=tm_2d) for port_name, m in measure_info]
+        measure_fns = [port_to_modes[port_name].io.measure_fn(m, use_jax, tm_2d=tm_2d) for port_name, m in measure_port]
         view_fns = [self.view_fn(port_to_modes[port_name].center, port_to_modes[port_name].size, use_jax)
-                    for port_name, _ in measure_info]
+                    for port_name, _ in measure_port]
 
         xp = jnp if use_jax else np
 
@@ -375,11 +326,12 @@ class SimGrid(YeeGrid):
 
         return sim_fn
 
-    def viz_panel(self, img_width: float = 700) -> Tuple["pn.layout.Panel", Tuple["Pipe", "Pipe", "Pipe"]]:
+    def viz_panel(self, img_width: float = 700, xs_axis: int = 2) -> Tuple["pn.layout.Panel", Tuple["Pipe", "Pipe", "Pipe"]]:
         """Visualizes a 2D slice of a simulation.
 
         Args:
             img_width: Width of the visualization panel for the simulation
+            xs_axis: Axis for the intersection
 
         Returns:
             Panel / dashboard for visualizing the permittivity and field overlay
@@ -388,12 +340,17 @@ class SimGrid(YeeGrid):
         """
         if not HOLOVIEWS_IMPORTED:
             raise ImportError("Holoviews not imported, so a viz panel cannot be generated")
-        if not self.ndim == 2:
-            raise NotImplementedError("Only implemented for ndim == 2!")
+        if self.ndim == 1:
+            raise NotImplementedError("Only implemented for ndim == 2, ndim == 3!")
         extent = get_extent_2d(self.shape, self.spacing[0])
         aspect = (extent[1] - extent[0]) / (extent[3] - extent[2])
         bounds = (extent[0], extent[2], extent[1], extent[3])
-        eps_norm = self.eps.T / np.max(self.eps.T)
+        if self.ndim == 2:
+            eps_norm = self.eps.T / np.max(self.eps.T)
+        else:
+            eps_slice = [slice(None), slice(None), slice(None)]
+            eps_slice[xs_axis] = 0
+            eps_norm = np.ones_like(self.eps[tuple(eps_slice)].T)
         bounded_img = lambda data: hv.Image(data, bounds=bounds)
         eps_pipe = Pipe(data=[])
         eps_dmap = hv.DynamicMap(bounded_img, streams=[eps_pipe])
@@ -539,7 +496,7 @@ class SimGrid(YeeGrid):
                 sparams, fields = sparams_fields
                 insertion_sqrt = jnp.linalg.norm(sparams)
                 cost = -jnp.abs(s @ (sparams / insertion_sqrt)) ** 2 * (
-                            1 - insertion_weight) - insertion_sqrt ** 2 * insertion_weight
+                        1 - insertion_weight) - insertion_sqrt ** 2 * insertion_weight
                 return cost, jax.lax.stop_gradient((sparams, fields))
         else:
             def obj(sparams_fields: Tuple[jnp.ndarray, jnp.ndarray]):

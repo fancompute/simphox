@@ -169,7 +169,7 @@ class ModeSolver(YeeGrid):
             C \\mathbf{h}_m &= \\lambda_m \\mathbf{h}_m,
 
         where :math:`0 \\leq m < M` for the :math:`M` (`num_modes`) modes with the largest wavenumbers
-        (:math:`\\beta_m = \\sqrt{\\lambda_m}`).
+        (:math:`\\beta_m = \\pm \\sqrt{\\lambda_m}`).
 
         Args:
             max_num_modes: Maximum number of modes to return (less are returned if they correspond
@@ -301,7 +301,7 @@ class ModeLibrary:
 
     def _check_num_modes(self, mode_idx: int):
         if mode_idx > self.m - 1:
-            raise ValueError("Out of range of number of solutions")
+            raise ValueError(f"Out of range of number of guided mode solutions {self.m}.")
         return mode_idx
 
     def h(self, mode_idx: int = 0, tm_2d: bool = True) -> np.ndarray:
@@ -440,7 +440,7 @@ class ModeLibrary:
     def _get_field_component(self, idx: int = 0, axis: Union[int, str] = 1, use_h: bool = True):
         field = self.h(mode_idx=idx) if use_h else self.e(mode_idx=idx)
         if idx > self.m - 1:
-            raise ValueError("Out of range of number of solutions")
+            raise ValueError(f"Out of range of number of solutions {self.m}")
         if not (axis in (0, 1, 2, 'x', 'y', 'z')):
             raise ValueError(f"Axis expected to be (0, 1, 2) or ('x', 'y', 'z') but got {axis}.")
         a = ['x', 'y', 'z'][axis] if isinstance(axis, int) else axis
@@ -519,11 +519,10 @@ class ModeLibrary:
                 np.asarray((0, 1, 2), dtype=int)
             ][place_axis]
             x = np.zeros((3, *grid.shape), dtype=np.complex128)
-            x[:, region[0], region[1], region[2]] = self.h(mode_idx)
-            x = x[axes]
+            x[(None,) + region] = self.h(mode_idx).transpose((0, *tuple(1 + axes)))
         else:
             x = np.zeros(grid.shape, dtype=np.complex128)
-            x[region[0], region[1]] = self.modes[mode_idx]
+            x[region[:2]] = self.modes[mode_idx]
         return x
 
     def measure_fn(self, mode_idx: int = 0, use_jax: bool = False, tm_2d: bool = True):
@@ -549,7 +548,19 @@ class ModeLibrary:
 
         return _measure
 
-    def evolve(self, length: float, mode_weights: Tuple[float, ...] = (1,), use_h: bool = True):
+    def evolve(self, length: Union[float, np.ndarray], mode_weights: Tuple[float, ...] = (1,), use_h: bool = True):
+        """Evolve a mode in time according to :code:`mode_weights`.
+
+        Args:
+            length: The length (or time) over which the mode is evolving. If a 1d array is provided,
+                output the mode evaluated at all the lengths in the array.
+            mode_weights: The mode weights.
+            use_h: Use the h field as the mode profile.
+
+        Returns:
+            The evolved mode profile(s).
+
+        """
         if use_h:
             f = sum([self.h(idx)[..., np.newaxis] * np.exp(1j * self.beta(idx) * length)[np.newaxis] * weight
                      for idx, weight in enumerate(mode_weights)])
@@ -562,6 +573,16 @@ class ModeLibrary:
         return np.pi / (self.beta(idx0) - self.beta(idx1))
 
     def evolve_viz(self, max_length: float, mode_weights: Tuple[float, ...] = (1,), power: bool = True):
+        """Use holoviews to dynamically visualize the evolution of a multimode field
+
+        Args:
+            max_length: Maximum length for the evolution of modes.
+            mode_weights: Mode weights for the mode evolution.
+            power: Visualize the power, otherwise visualize the field.
+
+        Returns:
+
+        """
         if not HOLOVIEWS_INSTALLED:
             raise ImportError("Holoviews not installed.")
 
@@ -583,3 +604,5 @@ class ModeLibrary:
         return hv.DynamicMap(_evolve, kdims=['length']).redim.values(
             length=np.linspace(0, max_length, int(max_length / self.solver.spacing[0]) + 1)
         )
+
+

@@ -105,25 +105,21 @@ def butterfly(n: int, n_rails: Optional[int] = None) -> ForwardMesh:
     return ForwardMesh(_butterfly(n, n_rails)).invert_columns()
 
 
-def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase_style: str = PhaseStyle.TOP,
-                error_mean_std: Tuple[float, float] = (0., 0.), loss_mean_std: Tuple[float, float] = (0., 0.)):
-    """Generate an architecture based on our recursive definitions programmed to implement normalized vector :code:`v`.
+def _program_vector_unit(v: np.ndarray, network: ForwardMesh):
+    """Code for programming a vector unit that already exists.
+
+    Note:
+        This is a private method since we cannot assume that the input network is the appropriate
+        vector unit (in size/structure) without defining a separate dataclass for it.
 
     Args:
-        v: The vector to be configured, if a matrix is provided
-        n_rails: Embed the first :code:`n` rails in an :code:`n_rails`-rail system (default :code:`n_rails == n`).
-        balanced: If balanced, does balanced tree (:code:`m = n // 2`) otherwise linear chain (:code:`m = n - 1`).
-        phase_style: Phase style for the nodes (see the :code:`PhaseStyle` enum).
-        error_mean_std: Mean and standard deviation for errors (in radians).
-        loss_mean_std: Mean and standard deviation for losses (in dB).
+        v: The vector / matrix (use final row) to program into the network
+        network: The network to program
 
     Returns:
-        Coupling network, thetas and phis that initialize the coupling network to implement normalized v.
+        The programmed vector unit
+
     """
-    network = tree(v.shape[0], n_rails=n_rails, balanced=balanced, phase_style=phase_style)
-    error_mean, error_std = error_mean_std
-    loss_mean, loss_std = loss_mean_std
-    network = network.add_error_mean(error_mean, loss_mean).add_error_variance(error_std, loss_std)
     thetas = np.zeros(v.shape[0] - 1)
     phis = np.zeros(v.shape[0] - 1)
     w = v.copy()
@@ -136,18 +132,19 @@ def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase
         theta, phi = nc.parallel_nullify(w, network.mzi_terms)
 
         # Vectorized (efficient!) parallel mzi elements
-        t11, t12, t21, t22 = nc.parallel_mzi_fn()(theta, phi)
+        t11, t12, t21, t22 = nc.parallel_mzi_fn(mzi_terms=network.mzi_terms)(theta, phi)
         t11, t12, t21, t22 = t11[:, np.newaxis], t12[:, np.newaxis], t21[:, np.newaxis], t22[:, np.newaxis]
 
         # these are the top port powers before nulling
-        network.pnsn[(nc.node_idxs,)] = np.abs(top[..., -1] if phase_style == PhaseStyle.TOP else bottom[..., -1]) ** 2
+        network.pnsn[(nc.node_idxs,)] = np.abs(top[..., -1]
+                                               if network.phase_style == PhaseStyle.TOP else bottom[..., -1]) ** 2
 
         # The final vector after the vectorized multiply
         w[(nc.top + nc.bottom,)] = np.vstack([t11 * top + t21 * bottom,
                                               t12 * top + t22 * bottom])
 
-        network.pn[(nc.node_idxs,)] = np.abs(
-            w[(nc.bottom,)][..., -1]) ** 2  # these are the relative powers after nulling
+        # these are the relative powers after nulling
+        network.pn[(nc.node_idxs,)] = np.abs(w[(nc.bottom,)][..., -1]) ** 2
 
         # The resulting thetas and phis, indexed according to the coupling network specifications
         thetas[(nc.node_idxs,)] = theta
@@ -158,10 +155,36 @@ def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase
     gammas = -np.angle(final_basis_vec * w[-1, -1])
 
     network.params = thetas, phis, gammas
+
     return network, w.squeeze()
 
 
-def balanced_tree(v: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std: Tuple[float, float] = (0., 0.),
+def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase_style: str = PhaseStyle.TOP,
+                error_mean_std: Tuple[float, float] = (0., 0.), loss_mean_std: Tuple[float, float] = (0., 0.)):
+    """Generate an architecture based on our recursive definitions programmed to implement normalized vector :code:`v`.
+
+    Args:
+        v: The number of inputs or vector to be configured. If a matrix is provided, use the final row vector of matrix.
+        n_rails: Embed the first :code:`n` rails in an :code:`n_rails`-rail system (default :code:`n_rails == n`).
+        balanced: If balanced, does balanced tree (:code:`m = n // 2`) otherwise linear chain (:code:`m = n - 1`).
+        phase_style: Phase style for the nodes (see the :code:`PhaseStyle` enum).
+        error_mean_std: Mean and standard deviation for errors (in radians).
+        loss_mean_std: Mean and standard deviation for losses (in dB).
+
+    Returns:
+        A tuple of the programmed coupling network, the matrix after being fed through the network.
+    """
+    network = tree(v.shape[0] if not np.isscalar(v) else v, n_rails=n_rails, balanced=balanced, phase_style=phase_style)
+    error_mean, error_std = error_mean_std
+    loss_mean, loss_std = loss_mean_std
+    network = network.add_error_mean(error_mean, loss_mean).add_error_variance(error_std, loss_std)
+    if np.isscalar(v):
+        return network, None
+    return _program_vector_unit(v, network)
+
+
+def balanced_tree(v: np.ndarray, phase_style: str = PhaseStyle.TOP,
+                  error_mean_std: Tuple[float, float] = (0., 0.),
                   loss_mean_std: Tuple[float, float] = (0., 0.)):
     """Balanced tree mesh that analyzes a vector :code:`v`.
 
@@ -175,7 +198,7 @@ def balanced_tree(v: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_s
         A tree mesh object analyzing a vector.
 
     """
-    return vector_unit(v.conj().T,
+    return vector_unit(v.conj().T if not np.isscalar(v) else v,
                        phase_style=phase_style, error_mean_std=error_mean_std, loss_mean_std=loss_mean_std)[0]
 
 
@@ -193,7 +216,7 @@ def unbalanced_tree(v: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean
         A linear chain mesh object analyzing a vector.
 
     """
-    return vector_unit(v.conj().T,
+    return vector_unit(v.conj().T if not np.isscalar(v) else v,
                        phase_style=phase_style, error_mean_std=error_mean_std, loss_mean_std=loss_mean_std,
                        balanced=False)[0]
 

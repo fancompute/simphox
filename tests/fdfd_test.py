@@ -9,7 +9,7 @@ np.random.seed(0)
 from jax.config import config
 
 config.update("jax_enable_x64", True)
-config.update('jax_platform_name', 'cpu')
+# config.update('jax_platform_name', 'cpu')
 
 EPS_3_3_2 = 1 + np.random.rand(3, 3, 2).astype(np.complex128)
 SOURCE_3_3_2 = np.random.rand(54).astype(np.complex128)

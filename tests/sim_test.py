@@ -32,7 +32,7 @@ def test_measure_fn(size: Size, spacing: Size, eps: Union[float, np.ndarray],
                     expected_params: np.ndarray):
     grid = SimGrid(size, spacing, eps=eps, pml_sep=1)
     grid.port = {i: Port(*port_tuple) for i, port_tuple in enumerate(port_list)}
-    measure_fn = grid.get_measure_fn(measure_info=measure_info)
+    measure_fn = grid.get_measure_fn(measure_port=measure_info)
     actual = measure_fn(fields)
     np.testing.assert_allclose(actual, expected_params, rtol=1e-5)
 

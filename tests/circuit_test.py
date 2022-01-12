@@ -5,7 +5,7 @@ import pytest
 from scipy.stats import unitary_group
 
 from simphox.circuit import cascade, vector_unit, rectangular, balanced_tree
-from simphox.circuit.vector import tree, hessian_fd, hessian_vector_unit, PhaseStyle
+from simphox.circuit.vector import _program_vector_unit, tree, hessian_fd, hessian_vector_unit, PhaseStyle
 from simphox.utils import random_vector
 
 import copy
@@ -102,6 +102,16 @@ def test_program_null_basis(u: np.ndarray):
     circuit.program_by_null_basis(basis)
     for param, param_expected in zip(params, circuit.params):
         np.testing.assert_allclose(param, param_expected, atol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "u", RAND_UNITARIES
+)
+def test_error_correction(u: np.ndarray):
+    tree = balanced_tree(u, error_mean_std=(0, 0.1))
+    x = tree.matrix()[-1]
+    tree_corrected = _program_vector_unit(x.conj(), copy.deepcopy(tree))[0]
+    np.testing.assert_allclose(np.abs(tree_corrected.matrix_fn(inputs=x.conj())(tree_corrected.params)[-1]), 1)
 
 
 @pytest.mark.parametrize(

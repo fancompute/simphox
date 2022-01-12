@@ -11,7 +11,10 @@ class BPM(SimGrid):
     def __init__(self, size: Size, spacing: Spacing, eps: Union[float, np.ndarray] = 1,
                  wavelength: float = 1.55, bloch_phase: Union[Size, float] = 0.0,
                  pml: Optional[Union[Shape, Size]] = None, pml_params: Size3 = (4, -16, 1, 5),
-                 yee_avg: bool = True, no_grad: bool = True):
+                 yee_avg: bool = True, no_grad: bool = True, not_implemented: bool = True):
+
+        if not_implemented:  # this is just to avoid annoying pycharm linting (TODO: remove this when fixed)
+            raise NotImplementedError("This class is still WIP")
 
         self.wavelength = wavelength
         self.k0 = 2 * np.pi / self.wavelength  # defines the units for the simulation!
@@ -30,7 +33,6 @@ class BPM(SimGrid):
             raise ValueError(f"Simulation dimension ndim must be 2 or 3 but got {self.ndim}.")
         self.init()
 
-        raise NotImplementedError("This class is still WIP")
 
     def init(self, center: Tuple[float, ...] = None, shape: Tuple[float, ...] = None, axis: int = 0):
         # initial scalar fields for fdtd

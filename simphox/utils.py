@@ -177,6 +177,20 @@ def curl_fn(df: Callable[[np.ndarray, int], np.ndarray], use_jax: bool = False, 
     return _curl
 
 
+def curl_pml_fn(df: Callable[[np.ndarray, int], np.ndarray], use_jax: bool = False):
+    xp = jnp if use_jax else np
+    def _curl(f: np.ndarray, prev_df: np.ndarray, b_pml: np.ndarray):
+        next_df = xp.stack(
+            [df(f[2], 1), df(f[1], 2),
+             df(f[0], 2), df(f[2], 0),
+             df(f[1], 0), df(f[0], 1)]
+        )
+        return next_df, xp.stack([next_df[0] + prev_df[0] * b_pml[1] - next_df[1] - prev_df[1] * b_pml[2],
+                                  next_df[2] + prev_df[2] * b_pml[2] - next_df[3] - prev_df[3] * b_pml[0],
+                                  next_df[4] + prev_df[4] * b_pml[0] - next_df[5] - prev_df[5] * b_pml[1]])
+    return _curl
+
+
 def yee_avg(params: np.ndarray, shift: int = 1) -> np.ndarray:
     p = params
     p_x = (p + np.roll(p, shift=shift, axis=1)) / 2
@@ -200,16 +214,14 @@ def yee_avg_jax(params: jnp.ndarray) -> jnp.ndarray:
     return jnp.stack((p_x, p_y, p_z))
 
 
-def pml_params(pos: np.ndarray, t: int, exp_scale: float, log_reflection: float, absorption_corr: float):
+def pml_sigma(pos: np.ndarray, thickness: int, exp_scale: float, log_reflection: float, absorption_corr: float):
     d = np.vstack(((pos[:-1] + pos[1:]) / 2, pos[:-1])).T
     d_pml = np.vstack((
-        (d[t] - d[:t]) / (d[t] - pos[0]),
-        np.zeros_like(d[t:-t]),
-        (d[-t:] - d[-t]) / (pos[-1] - d[-t])
+        (d[thickness] - d[:thickness]) / (d[thickness] - pos[0]),
+        np.zeros_like(d[thickness:-thickness]),
+        (d[-thickness:] - d[-thickness]) / (pos[-1] - d[-thickness])
     )).T
-    sigma = (exp_scale + 1) * (d_pml ** exp_scale) * log_reflection / (2 * absorption_corr)
-    alpha = (1 - d_pml) ** exp_scale
-    return sigma, alpha
+    return (exp_scale + 1) * (d_pml ** exp_scale) * log_reflection / (2 * absorption_corr)
 
 
 # Real-time splitter metrics
@@ -250,7 +262,7 @@ def random_tensor(size: Union[int, Tuple]) -> np.ndarray:
         The random complex normal tens0r.
 
     """
-    size = (size,) if np.issubdtype(size, int) else size
+    size = (int(size),) if np.isscalar(size) else size
     return np.array(0.5 * np.random.randn(*size) + 0.5 * np.random.randn(*size) * 1j)
 
 
@@ -347,3 +359,23 @@ def gaussian_fn(wavelength: float, pulse_width: float = 0, fwidth: float = np.in
             if t > start_time else 0
 
     return _gaussian
+
+
+def shift_slice(slice_to_shift: Tuple[Union[slice, int], ...], shift: int = 1, axis = 0):
+    """Shift slice tuple by some amount.
+
+    Args:
+        slice_to_shift:
+        shift: Shift
+        axis: Axis to shift (ignore if the slice start OR stop is None)
+
+    Returns:
+
+    """
+    slices = list(slice_to_shift)
+    if isinstance(slices[axis], int):
+        slices[axis] += shift
+    elif isinstance(slices[axis], slice):
+        if isinstance(slices[axis].start, int) and isinstance(slices[axis].stop, int):
+            slices[axis] += slice(slices[axis].start + shift, slices[axis].stop + shift)
+    return tuple(slices)
