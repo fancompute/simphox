@@ -33,7 +33,7 @@ class FDTD(SimGrid):
     """
 
     def __init__(self, size: Size, spacing: Spacing, eps: Union[float, np.ndarray] = 1,
-                 pml: Optional[Union[Shape, Size, float]] = None, pml_params: Size3 = (3, -35, 1),
+                 pml: Optional[Union[Shape, Size, float]] = None, pml_params: Size3 = (3, -25, 1),
                  pml_sep: int = 5, use_jax: bool = True, name: str = 'fdtd'):
         super(FDTD, self).__init__(size, spacing, eps, pml=pml, pml_params=pml_params, pml_sep=pml_sep, name=name)
         self.dt = 1 / np.sqrt(np.sum(1 / self.spacing ** 2))  # includes courant condition!
@@ -42,34 +42,10 @@ class FDTD(SimGrid):
         self.pml_regions = []
         self.sigma = None
         self.cpml_b, self.cpml_c = [], []
+        self._curl_e_pml, self._curl_h_pml = [], []
         # pml (internal to the grid / does not affect params, so specified here!)
         if self.pml_shape is not None:
-            exp_scale, log_reflection, absorption_corr = pml_params
-            kappa, alpha = 1, 1e-8  # TODO: make these params
-            self.sigma = [-pml_sigma(self.pos[ax], thickness=self.pml_shape[ax], exp_scale=exp_scale,
-                                     log_reflection=log_reflection, absorption_corr=absorption_corr) for ax in range(3)]
-            # for memory and time purposes, we only update the pml slices, NOT the full field
-            # therefore, we need to specify the pml regions for the fields.
-            self.pml_regions = ((slice(None), slice(None, self.pml_shape[0]), slice(None), slice(None)),
-                                (slice(None), slice(-self.pml_shape[0], None), slice(None), slice(None)),
-                                (slice(None), slice(None), slice(None, self.pml_shape[1]), slice(None)),
-                                (slice(None), slice(None), slice(-self.pml_shape[1], None), slice(None)),
-                                (slice(None), slice(None), slice(None), slice(None, self.pml_shape[2])),
-                                (slice(None), slice(None), slice(None), slice(-self.pml_shape[2], None)))
-
-            for i, region in enumerate(self.pml_regions):
-                ax = i // 2
-                if self.pml_shape[ax]:
-                    pml_slice = tuple([None if idx == slice(None) else idx for idx in region[1:]])
-                    pml_shape = np.array((2,) + self.field_shape)
-                    pml_shape[ax + 2] = self.pml_shape[ax]
-                    sigma_ax = np.zeros(pml_shape, dtype=np.complex128)
-                    sigma_ax[0, ax] = self.sigma[ax][0][pml_slice]
-                    sigma_ax[1, ax] = self.sigma[ax][1][pml_slice]
-                    self.cpml_b.append(np.exp(-(alpha + sigma_ax / kappa) * self.dt))
-                    self.cpml_c.append((self.cpml_b[-1] - 1) * sigma_ax / (sigma_ax * kappa + alpha * kappa ** 2))
-            self._curl_h_pml = [self.curl_h_pml(pml_idx) for pml_idx in range(len(self.pml_regions))]
-            self._curl_e_pml = [self.curl_e_pml(pml_idx) for pml_idx in range(len(self.pml_regions))]
+            self._set_pml(pml_params)
         self._curl_e = self.curl_fn(use_jax=self.use_jax)
         self._curl_h = self.curl_fn(of_h=True, use_jax=self.use_jax)
 
@@ -143,7 +119,7 @@ class FDTD(SimGrid):
         # update pml in pml regions if specified
         phi_e = []
         for pml_idx, pml_region in enumerate(self.pml_regions):
-            psi_e[pml_idx], p = self._curl_h_pml[pml_idx](h[pml_region], psi_e[pml_idx], self.cpml_b[pml_idx][1])
+            psi_e[pml_idx], p = self._curl_h_pml[pml_idx](h, psi_e[pml_idx], self.cpml_b[pml_idx][1])
             phi_e.append(p)
 
         # update e field
@@ -159,7 +135,7 @@ class FDTD(SimGrid):
         for source, _, source_region in sources:
             if source is not None:
                 if self.use_jax:
-                    e = e.at[source_region].add(-source.squeeze() / self.eps_t[source_region] * self.dt)
+                    e = e.at[source_region].set(-source.squeeze() / self.eps_t[source_region] * self.dt)
                 else:
                     e[source_region] -= source.squeeze() / self.eps_t[source_region] * self.dt
 
@@ -170,7 +146,7 @@ class FDTD(SimGrid):
         # update h field in pml regions if specified
         phi_h = []
         for pml_idx, pml_region in enumerate(self.pml_regions):
-            psi_h[pml_idx], p = self._curl_e_pml[pml_idx](e[pml_region], psi_h[pml_idx], self.cpml_b[pml_idx][0])
+            psi_h[pml_idx], p = self._curl_e_pml[pml_idx](e, psi_h[pml_idx], self.cpml_b[pml_idx][0])
             phi_h.append(p)
 
         # update h field
@@ -186,7 +162,7 @@ class FDTD(SimGrid):
         for _, source, source_region in sources:
             if source is not None:
                 if self.use_jax:
-                    h = h.at[source_region].add(-source.squeeze() * self.dt)
+                    h = h.at[source_region].set(-source.squeeze() * self.dt)
                 else:
                     h[source_region] -= source.squeeze() * self.dt
 
@@ -327,16 +303,44 @@ class FDTD(SimGrid):
             power = np.abs(f[viz_axis].T) ** 2
             power_pipe.send(power / np.max(power + np.spacing(1)))
 
+    def _set_pml(self, pml_params: Size3):
+        exp_scale, log_reflection, absorption_corr = pml_params
+        kappa, alpha = 1, 1e-8  # TODO: make these params
+        self.sigma = [-pml_sigma(self.pos[ax], thickness=self.pml_shape[ax], exp_scale=exp_scale,
+                                 log_reflection=log_reflection, absorption_corr=absorption_corr) for ax in range(3)]
+        # for memory and time purposes, we only update the pml slices, NOT the full field
+        # therefore, we need to specify the pml regions for the fields.
+        self.pml_regions = ((slice(None), slice(None, self.pml_shape[0]), slice(None), slice(None)),
+                            (slice(None), slice(-self.pml_shape[0], None), slice(None), slice(None)),
+                            (slice(None), slice(None), slice(None, self.pml_shape[1]), slice(None)),
+                            (slice(None), slice(None), slice(-self.pml_shape[1], None), slice(None)),
+                            (slice(None), slice(None), slice(None), slice(None, self.pml_shape[2])),
+                            (slice(None), slice(None), slice(None), slice(-self.pml_shape[2], None)))
+
+        for i, region in enumerate(self.pml_regions):
+            ax = i // 2
+            if self.pml_shape[ax]:
+                pml_slice = tuple([None if idx == slice(None) else idx for idx in region[1:]])
+                pml_shape = np.array((2,) + self.field_shape)
+                pml_shape[ax + 2] = self.pml_shape[ax]
+                sigma_ax = np.zeros(pml_shape, dtype=np.complex128)
+                sigma_ax[0, ax] = self.sigma[ax][0][pml_slice]
+                sigma_ax[1, ax] = self.sigma[ax][1][pml_slice]
+                self.cpml_b.append(np.exp(-(alpha + sigma_ax / kappa) * self.dt))
+                self.cpml_c.append((self.cpml_b[-1] - 1) * sigma_ax / (sigma_ax * kappa + alpha * kappa ** 2))
+        self._curl_h_pml = [self.curl_h_pml(pml_idx) for pml_idx in range(len(self.pml_regions))]
+        self._curl_e_pml = [self.curl_e_pml(pml_idx) for pml_idx in range(len(self.pml_regions))]
+
     def curl_e_pml(self, pml_idx: int) -> Callable[[Array, Array, Array], Array]:
         dx, _ = self._dxes
         c, s = self.cpml_c[pml_idx][0], self.pml_regions[pml_idx][1:]
-        de = lambda e, ax: c[ax] * (self.xp.roll(e, -1, axis=ax) - e) / dx[ax][s]
+        de = lambda e, ax: c[ax] * (self.xp.roll(e, -1, axis=ax)[s] - e[s]) / dx[ax][s]
         return curl_pml_fn(de, use_jax=self.use_jax)
 
     def curl_h_pml(self, pml_idx: int) -> Callable[[Array, Array, Array], Array]:
         _, dx = self._dxes
         c, s = self.cpml_c[pml_idx][1], self.pml_regions[pml_idx][1:]
-        dh = lambda h, ax: c[ax] * (h - self.xp.roll(h, 1, axis=ax)) / dx[ax][s]
+        dh = lambda h, ax: c[ax] * (h[s] - self.xp.roll(h, 1, axis=ax)[s]) / dx[ax][s]
         return curl_pml_fn(dh, use_jax=self.use_jax)
 
     @property

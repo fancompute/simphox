@@ -281,7 +281,7 @@ class ForwardMesh:
         node_columns = self.columns[::-1] if back else self.columns
         node_fn = self.parallel_mzi_fn(use_jax=use_jax, back=back)
         xp = jnp if use_jax else np
-        inputs = xp.eye(node_columns[0].n, dtype=xp.complex128) if inputs is None else inputs
+        inputs = np.eye(node_columns[0].n, dtype=np.complex128) if inputs is None else inputs
         inputs = inputs[..., np.newaxis] if inputs.ndim == 1 else inputs
 
         # Define a function that represents an mzi column given inputs and all available thetas and phis
@@ -356,7 +356,7 @@ class ForwardMesh:
             node.error = e
             node.error_right = er
             node.loss = 1 - 10 ** (loss / 10)
-        mesh = ForwardMesh(new_nodes)
+        mesh = ForwardMesh(new_nodes, self.phase_style)
         mesh.params = self.params
         return mesh
 
@@ -382,7 +382,7 @@ class ForwardMesh:
             node.error = e
             node.error_right = er
             node.loss = 1 - 10 ** (loss / 10)
-        mesh = ForwardMesh(new_nodes)
+        mesh = ForwardMesh(new_nodes, self.phase_style)
         mesh.params = self.params
         return mesh
 
@@ -476,19 +476,29 @@ class ForwardMesh:
                 continue
 
             if explicit:
-                outputs[(nc.top,)] *= np.exp(1j * phis[(nc.node_idxs,)][:, np.newaxis])
-                propagated.append(outputs.copy())
-                nc._column_transform(outputs, left)
-                propagated.append(outputs.copy())
-                outputs[(nc.top,)] *= np.exp(1j * thetas[(nc.node_idxs,)][:, np.newaxis])
-                propagated.append(outputs.copy())
-                nc._column_transform(outputs, right)
-                propagated.append(outputs.copy())
+                if back:
+                    nc._column_transform(outputs, right)
+                    propagated.append(outputs.copy())
+                    outputs[(nc.top,)] *= np.exp(1j * thetas[(nc.node_idxs,)][:, np.newaxis])
+                    propagated.append(outputs.copy())
+                    nc._column_transform(outputs, left)
+                    propagated.append(outputs.copy())
+                    outputs[(nc.top,)] *= np.exp(1j * phis[(nc.node_idxs,)][:, np.newaxis])
+                    propagated.append(outputs.copy())
+                else:
+                    outputs[(nc.top,)] *= np.exp(1j * phis[(nc.node_idxs,)][:, np.newaxis])
+                    propagated.append(outputs.copy())
+                    nc._column_transform(outputs, left)
+                    propagated.append(outputs.copy())
+                    outputs[(nc.top,)] *= np.exp(1j * thetas[(nc.node_idxs,)][:, np.newaxis])
+                    propagated.append(outputs.copy())
+                    nc._column_transform(outputs, right)
+                    propagated.append(outputs.copy())
             else:
                 nc._column_transform(outputs, mzis)
                 propagated.append(outputs.copy())
 
-        if not back and column_cutoff == -1:
+        if not back and column_cutoff == self.num_columns:
             outputs = (np.exp(1j * gammas) * outputs.T).T
             propagated.append(outputs.copy())
         return np.array(propagated).squeeze() if explicit else np.array(propagated)
@@ -553,7 +563,7 @@ class ForwardMesh:
             raise NotImplementedError('Require phase_style not be of the SYMMETRIC variety.')
         elif self.phase_style == PhaseStyle.BOTTOM:
             theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
-            phi = np.angle(top[:, -1]) - np.angle(bottom[:, -1])
+            phi = np.angle(top[:, -1]) - np.angle(bottom[:, -1]) + np.pi
             phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
         else:
             theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)

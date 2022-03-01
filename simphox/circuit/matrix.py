@@ -1,8 +1,6 @@
-from typing import Tuple, Callable
+from typing import Tuple
 
-import numpy as np
 import scipy as sp
-
 
 try:
     DPHOX_IMPORTED = True
@@ -12,9 +10,14 @@ except ImportError:
     DPHOX_IMPORTED = False
 
 from .coupling import PhaseStyle
-from .forward import ForwardMesh
 from .rectangular import rectangular
 from .vector import vector_unit
+from scipy.stats import unitary_group
+import numpy as np
+
+from scipy.linalg import svd, qr, block_diag
+from .coupling import CouplingNode
+from .forward import ForwardMesh
 
 
 def cascade(u: np.ndarray, balanced: bool = True, phase_style: str = PhaseStyle.TOP,
@@ -74,7 +77,7 @@ def triangular(u: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std:
     """Triangular mesh that analyzes a unitary matrix :code:`u`.
 
     Args:
-        u: Unitary matrix
+        u: Unitary matrix or integer representing the number of inputs and outputs
         phase_style: Phase style for the nodes of the mesh.
         error_mean_std: Split error mean and standard deviation
         loss_mean_std: Loss error mean and standard deviation (dB)
@@ -83,6 +86,7 @@ def triangular(u: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std:
         A triangular mesh object.
 
     """
+    u = unitary_group.rvs(u) if np.isscalar(u) else u
     return cascade(u, balanced=False, phase_style=phase_style,
                    error_mean_std=error_mean_std, loss_mean_std=loss_mean_std)
 
@@ -101,6 +105,7 @@ def tree_cascade(u: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_st
         A tree cascade mesh object.
 
     """
+    u = unitary_group.rvs(u) if np.isscalar(u) else u
     return cascade(u, balanced=True, phase_style=phase_style,
                    error_mean_std=error_mean_std, loss_mean_std=loss_mean_std)
 
@@ -120,14 +125,6 @@ def dirichlet_matrix(v, embed_dim=None):
     u = np.roll(u, -1, axis=0) if embed_dim is None else sp.linalg.block_diag(np.roll(u, -1, axis=0),
                                                                               np.eye(embed_dim - v.size))
     return u.T
-
-
-import numpy as np
-
-from scipy.linalg import svd, qr, block_diag, dft
-from .coupling import CouplingNode
-from .forward import ForwardMesh
-
 
 def cs(mat: np.ndarray):
     """Cosine-sine decomposition of arbitrary matrix :math:`U`(:code:`u`)

@@ -47,7 +47,7 @@ class PhaseStyle(str, Enum):
         TOP: Top phase shift
         BOTTOM: Bottom phase shift
         DIFFERENTIAL: Differential phase shift
-        SYMMETRIC: Symemtric phase shift
+        SYMMETRIC: Symmetric phase shift
 
     """
     TOP = 'top'
