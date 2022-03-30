@@ -100,7 +100,7 @@ def plot_eps_2d(ax, eps: np.ndarray, spacing: Optional[float] = None, cmap: str 
 
 
 def plot_field_2d(ax, field: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Optional[float] = None,
-                  cmap: str = 'RdBu', mat_cmap: str = 'gray', alpha: float = 0.8):
+                  cmap: str = 'RdBu', mat_cmap: str = 'gray', alpha: float = 0.8, vmax = None):
     """Plot field in 2D
 
     Args:
@@ -119,8 +119,9 @@ def plot_field_2d(ax, field: np.ndarray, eps: Optional[np.ndarray] = None, spaci
         ax.set_xlabel(r'$x$ ($\mu$m)')
     if eps is not None:
         plot_eps_2d(ax, eps, spacing, mat_cmap)
-    im_val = field * np.sign(field.flat[np.abs(field).argmax()])
-    norm = mcolors.TwoSlopeNorm(vcenter=0, vmin=-im_val.max(), vmax=im_val.max())
+    im_val = field
+    vmax = np.max(im_val * np.sign(field.flat[np.abs(field).argmax()])) if vmax is None else vmax
+    norm = mcolors.TwoSlopeNorm(vcenter=0, vmin=-vmax, vmax=vmax)
     ax.imshow(im_val.T, cmap=cmap, origin='lower', alpha=alpha, extent=extent, norm=norm)
 
 
@@ -217,7 +218,7 @@ def hv_power_2d(power: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Op
 
 
 def plot_power_2d(ax, power: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Optional[float] = None,
-                  cmap: str = 'hot', mat_cmap: str = 'gray', alpha: float = 0.8):
+                  cmap: str = 'hot', mat_cmap: str = 'gray', alpha: float = 0.8, vmax = None):
     """Plot the power (computed using Poynting) in 2D
 
     Args:
@@ -236,7 +237,8 @@ def plot_power_2d(ax, power: np.ndarray, eps: Optional[np.ndarray] = None, spaci
         ax.set_xlabel(r'$x$ ($\mu$m)')
     if eps is not None:
         plot_eps_2d(ax, eps, spacing, mat_cmap)
-    ax.imshow(power.T, cmap=cmap, origin='lower', alpha=alpha, extent=extent)
+    vmax = np.max(power) if vmax is None else vmax
+    ax.imshow(power.T, cmap=cmap, origin='lower', alpha=alpha, extent=extent, vmax=vmax)
 
 
 def plot_power_3d(plot: "Plot", power: np.ndarray, eps: Optional[np.ndarray] = None, axis: int = 0,

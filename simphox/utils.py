@@ -76,8 +76,8 @@ class Box:
         min: min x and min y of box
     """
     size: Union[float, Size2]
-    spacing: float = 1
     material: Optional[Material] = None
+    spacing: float = 1
     min: Size2 = (0., 0.)
 
     def __post_init_post_parse__(self):

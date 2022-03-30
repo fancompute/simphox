@@ -570,7 +570,7 @@ class ModeLibrary:
         return f
 
     def beat_length(self, idx0: int = 0, idx1: int = 1):
-        return np.pi / (self.beta(idx0) - self.beta(idx1))
+        return 2 * np.pi / (self.beta(idx0) - self.beta(idx1))
 
     def evolve_viz(self, max_length: float, mode_weights: Tuple[float, ...] = (1,), power: bool = True):
         """Use holoviews to dynamically visualize the evolution of a multimode field
