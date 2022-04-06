@@ -462,13 +462,12 @@ class ForwardMesh:
         thetas, phis, gammas = params
 
         node_columns = self.columns[::-1] if back else self.columns
-        inputs = np.eye(self.n, dtype=np.complex128) if inputs is None else inputs
+        inputs = np.eye(self.n, dtype=np.complex128) if inputs is None else inputs + 0j
         inputs = inputs[:, np.newaxis] if inputs.ndim == 1 else inputs
         outputs = inputs.copy()
         if explicit:
             left = self.parallel_dc(right=False)
             right = self.parallel_dc(right=True)
-            print(left, right)
         else:
             mzis = self.parallel_mzi_fn(use_jax=False, back=back)(thetas, phis)
 
