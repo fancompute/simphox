@@ -20,7 +20,7 @@ from scipy.stats import beta
 
 from ..typing import List, Union, PhaseParams
 from ..utils import fix_dataclass_init_docs, normalized_error
-from .coupling import CouplingNode, PhaseStyle, transmissivity_to_phase, direct_transmissivity
+from .coupling import CouplingNode, loss2insertion, PhaseStyle, transmissivity_to_phase, direct_transmissivity
 from scipy.special import betaincinv
 
 
@@ -44,17 +44,18 @@ class ForwardMesh:
     phase_style: str = PhaseStyle.TOP
 
     def __post_init_post_parse__(self):
+        self.num_nodes = len(self.nodes)
         self.top = tuple([int(node.top) for node in self.nodes])
         self.bottom = tuple([int(node.bottom) for node in self.nodes])
-        self.errors_left = np.array([node.error for node in self.nodes])
-        self.errors_right = np.array([node.error_right for node in self.nodes])
-        self.mzi_terms = np.array(
-            [np.cos(np.pi / 4 + self.errors_right) * np.cos(np.pi / 4 + self.errors_left),
-             np.cos(np.pi / 4 + self.errors_right) * np.sin(np.pi / 4 + self.errors_left),
-             np.sin(np.pi / 4 + self.errors_right) * np.cos(np.pi / 4 + self.errors_left),
-             np.sin(np.pi / 4 + self.errors_right) * np.sin(np.pi / 4 + self.errors_left)]
-        )
+        self.bs_errors = np.array([node.bs_error for node in self.nodes])
         self.losses = np.array([node.loss for node in self.nodes])
+        bs_error_l, bs_error_r = self.all_errors.T
+        self.mzi_terms = np.array(
+            [np.cos(np.pi / 4 + bs_error_r) * np.cos(np.pi / 4 + bs_error_l),
+             np.cos(np.pi / 4 + bs_error_r) * np.sin(np.pi / 4 + bs_error_l),
+             np.sin(np.pi / 4 + bs_error_r) * np.cos(np.pi / 4 + bs_error_l),
+             np.sin(np.pi / 4 + bs_error_r) * np.sin(np.pi / 4 + bs_error_l)]
+        )
         self.node_idxs = tuple([node.node_id for node in self.nodes])
         if np.sum(self.node_idxs) == 0:
             self.node_idxs = tuple(np.arange(len(self.nodes)).tolist())
@@ -63,7 +64,6 @@ class ForwardMesh:
         self.n = self.nodes[0].n if len(self.nodes) > 0 else 1
         self.alpha = np.array([node.alpha for node in self.nodes])
         self.beta = np.array([node.beta for node in self.nodes])
-        self.num_nodes = len(self.nodes)
         self.column_by_node = np.array([node.column for node in self.nodes])
         self.thetas = self.rand_theta()
         self.phis = 2 * np.pi * np.random.rand(self.thetas.size)
@@ -189,13 +189,14 @@ class ForwardMesh:
             MZI matrix elements
 
         """
-        insertion = np.sqrt(1 - self.losses)
-        errors = self.errors_right if right else self.errors_left
-        t11 = np.sin(np.pi / 4 + errors)
-        t12 = 1j * np.cos(np.pi / 4 + errors)
+        right = int(right)
+        insertion = loss2insertion(self.all_losses.T[right])
+        errors = self.all_errors.T[right]
+        t11 = insertion * np.sin(np.pi / 4 + errors)
+        t12 = insertion * 1j * np.cos(np.pi / 4 + errors)
         t21 = 1j * np.cos(np.pi / 4 + errors)
         t22 = np.sin(np.pi / 4 + errors)
-        return insertion * np.array([t11, t12, t21, t22])
+        return np.array([t11, t12, t21, t22])
 
     def parallel_mzi_fn(self, use_jax: bool = False, back: bool = False,
                         mzi_terms: np.ndarray = None):
@@ -218,37 +219,37 @@ class ForwardMesh:
         # stands for cos-cos, cos-sin, sin-cos, sin-sin terms.
         cc, cs, sc, ss = self.mzi_terms if mzi_terms is None else mzi_terms.T[(self.node_idxs,)].T
 
-        # insertion (assume a fixed loss that is global for each node)
-        insertion = 1 - self.losses
+        # insertion (assume a fixed loss that is global for each node) expressed in terms of dB
+        il, ir = np.log(10) * self.all_losses.T / 10
 
         if self.phase_style == PhaseStyle.TOP:
             def parallel_mzi(theta, phi):
-                t11 = (-ss + cc * xp.exp(1j * theta)) * xp.exp(1j * phi)
-                t12 = 1j * (cs + sc * xp.exp(1j * theta)) * xp.exp(1j * phi * (1 - back))
-                t21 = 1j * (sc + cs * xp.exp(1j * theta)) * xp.exp(1j * phi * back)
-                t22 = (cc - ss * xp.exp(1j * theta))
-                return insertion * xp.array([t11, t12, t21, t22])
+                t11 = (-ss + cc * xp.exp(1j * theta + il)) * xp.exp(1j * phi + ir)
+                t12 = 1j * (cs + sc * xp.exp(1j * theta + il)) * xp.exp((1j * phi + ir) * (1 - back))
+                t21 = 1j * (sc + cs * xp.exp(1j * theta + il)) * xp.exp((1j * phi + ir) * back)
+                t22 = (cc - ss * xp.exp(1j * theta + il))
+                return xp.array([t11, t12, t21, t22])
         elif self.phase_style == PhaseStyle.BOTTOM:
             def parallel_mzi(theta, phi):
-                t11 = (-ss * xp.exp(1j * theta) + cc)
-                t12 = 1j * (cs * xp.exp(1j * theta) + sc) * xp.exp(1j * phi * back)
-                t21 = 1j * (sc * xp.exp(1j * theta) + cs) * xp.exp(1j * phi * (1 - back))
-                t22 = (cc * xp.exp(1j * theta) - ss) * xp.exp(1j * phi)
-                return insertion * xp.array([t11, t12, t21, t22])
+                t11 = (-ss * xp.exp(1j * theta + il) + cc)
+                t12 = 1j * (cs * xp.exp(1j * theta + il) + sc) * xp.exp((1j * phi + ir) * back)
+                t21 = 1j * (sc * xp.exp(1j * theta + il) + cs) * xp.exp((1j * phi + ir) * (1 - back))
+                t22 = (cc * xp.exp(1j * theta + il) - ss) * xp.exp(1j * phi + ir)
+                return xp.array([t11, t12, t21, t22])
         elif self.phase_style == PhaseStyle.SYMMETRIC:
             def parallel_mzi(theta, phi):
-                t11 = (-ss + cc * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta / 2))
-                t12 = 1j * (cs + sc * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta / 2))
-                t21 = 1j * (sc + cs * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta / 2))
-                t22 = (cc - ss * xp.exp(1j * theta)) * xp.exp(1j * (phi - theta / 2))
-                return insertion * xp.array([t11, t12, t21, t22])
+                t11 = (-ss + cc * xp.exp(1j * theta + il)) * xp.exp(1j * (phi - theta / 2) + ir)
+                t12 = 1j * (cs + sc * xp.exp(1j * theta + il)) * xp.exp(1j * (phi - theta / 2) + ir)
+                t21 = 1j * (sc + cs * xp.exp(1j * theta + il)) * xp.exp(1j * (phi - theta / 2) + ir)
+                t22 = (cc - ss * xp.exp(1j * theta + il)) * xp.exp(1j * (phi - theta / 2) + ir)
+                return xp.array([t11, t12, t21, t22])
         elif self.phase_style == PhaseStyle.DIFFERENTIAL:
             def parallel_mzi(theta, phi):
-                t11 = (-ss + cc * xp.exp(1j * theta)) * xp.exp(1j * ((-phi - theta) / 2 + phi * back))
-                t12 = 1j * (cs + sc * xp.exp(1j * theta)) * xp.exp(1j * ((-phi - theta) / 2 + phi * back))
-                t21 = 1j * (sc + cs * xp.exp(1j * theta)) * xp.exp(1j * ((phi - theta) / 2 - phi * back))
-                t22 = (cc - ss * xp.exp(1j * theta)) * xp.exp(1j * ((phi - theta) / 2 - phi * back))
-                return insertion * xp.array([t11, t12, t21, t22])
+                t11 = (-ss + cc * xp.exp(1j * theta + il)) * xp.exp(1j * ((-phi - theta) / 2 + phi * back) + ir)
+                t12 = 1j * (cs + sc * xp.exp(1j * theta + il)) * xp.exp(1j * ((-phi - theta) / 2 + phi * back) + ir)
+                t21 = 1j * (sc + cs * xp.exp(1j * theta + il)) * xp.exp(1j * ((phi - theta) / 2 - phi * back) + ir)
+                t22 = (cc - ss * xp.exp(1j * theta + il)) * xp.exp(1j * ((phi - theta) / 2 - phi * back) + ir)
+                return xp.array([t11, t12, t21, t22])
         else:
             raise ValueError(f"Phase style {self.phase_style} is not valid.")
         return jit(parallel_mzi) if use_jax else parallel_mzi
@@ -333,62 +334,72 @@ class ForwardMesh:
         """
         return ForwardMesh.aggregate(self.columns)
 
-    def add_error_mean(self, error: Union[float, np.ndarray] = 0, loss_db: Union[float, np.ndarray] = 0,
-                       error_right: Optional[Union[float, np.ndarray]] = None):
+    def add_error_mean(self, error: Union[float, np.ndarray] = 0, loss_db: Union[float, np.ndarray] = 0):
         """Add split error (in phase) and loss error (in dB) mean values to the circuit.
 
         Args:
             error: Phase-parametrized error for the left (and right if not specified) splitters
             loss_db: The loss in dB.
-            error_right: Phase-parametrized error for the right splitter
 
         Returns:
-            A new :code:`ForwardCouplingCircuit` with the corrected error terms.
+            A new :code:`ForwardCouplingCircuit` with the modified error terms.
 
         """
         new_nodes = copy.deepcopy(self.nodes)
-        if error_right is None:
-            error_right = error
-        error = error * np.ones_like(self.errors_left) if not isinstance(error, np.ndarray) else error
-        error_right = error_right * np.ones_like(self.errors_right) if not isinstance(error_right, np.ndarray) else error_right
+        error = error * np.ones_like(self.bs_errors) if not isinstance(error, np.ndarray) else error
         loss_db = loss_db * np.ones_like(self.losses) if not isinstance(loss_db, np.ndarray) else loss_db
-        for node, e, er, loss in zip(new_nodes, error, error_right, loss_db):
-            node.error = e
-            node.error_right = er
-            node.loss = 1 - 10 ** (loss / 10)
+        for node, e, loss in zip(new_nodes, error, loss_db):
+            node.bs_error = tuple(e)
+            node.loss = tuple(loss)
         mesh = ForwardMesh(new_nodes, self.phase_style)
         mesh.params = self.params
         return mesh
 
-    def add_error_variance(self, error_std: float, loss_db_std: float = 0, correlated_error: bool = True):
+    def add_error_variance(self, bs_error_std: float, loss_db_std: float = 0, equal_splitter_error: bool = True):
         """Add split error (in phase) and loss error (in dB) variance values to the circuit.
 
         Args:
-            error_std:
-            loss_db_std:
-            correlated_error:
+            bs_error_std: Standard deviation in the beamsplitter error
+            loss_db_std: Standard deviation in the loss error in dB
+            equal_splitter_error: Equalize the beamsplitter error across the left and right splitters
 
         Returns:
+            A new :code:`ForwardCouplingCircuit` with the modified error terms.
 
         """
         new_nodes = copy.deepcopy(self.nodes)
-        error_std_left = error_std * np.random.randn(self.errors_left.size)
-        error_std_right = error_std * np.random.randn(self.errors_right.size) if not correlated_error else error_std_left
-        loss_std = loss_db_std * np.random.randn(self.losses.size)
-        loss_db = np.maximum(self.loss_db + loss_std, 0)
-        error = self.errors_left + error_std_left
-        error_right = self.errors_right + error_std_right
-        for node, e, er, loss in zip(new_nodes, error, error_right, loss_db):
-            node.error = e
-            node.error_right = er
-            node.loss = 1 - 10 ** (loss / 10)
+        bs_error_std = bs_error_std * np.random.randn(*self.bs_errors.shape)
+        if equal_splitter_error:
+            bs_error_std[:, 1] = bs_error_std[:, 0]
+        loss_std = loss_db_std * np.random.randn(*self.losses.shape)
+        loss_db = self.losses + loss_std
+        error = self.bs_errors + bs_error_std
+        for node, e, loss in zip(new_nodes, error, loss_db):
+            node.bs_error = tuple(e)
+            node.loss = tuple(loss)
         mesh = ForwardMesh(new_nodes, self.phase_style)
         mesh.params = self.params
         return mesh
 
     @property
-    def loss_db(self):
-        return 10 * np.log10(1 - self.losses)
+    def all_errors(self):
+        if (self.bs_errors.ndim == 1 or self.bs_errors.shape[-1] == 1) and self.bs_errors.size == self.num_nodes:
+            return np.hstack((self.bs_errors, self.bs_errors))
+        elif self.bs_errors.shape[-1] == 2 and self.bs_errors.size == self.num_nodes * 2:
+            return self.bs_errors
+        else:
+            raise AttributeError(f"Losses should have size "
+                                 f"({self.bs_errors.shape[-1]}, [1 or 2]).")
+
+    @property
+    def all_losses(self):
+        if (self.losses.ndim == 1 or self.losses.shape[-1] == 1) and self.losses.size == self.num_nodes:
+            return np.hstack((self.losses, self.losses))
+        elif self.losses.shape[-1] == 2 and self.losses.size == self.num_nodes * 2:
+            return self.losses
+        else:
+            raise AttributeError(f"Losses should have size "
+                                 f"({self.losses.shape[-1]}, [1 or 2]).")
 
     def matrix_opt(self, uopt: np.ndarray, params: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
                    step_size: float = 0.1, use_jit: bool = False):
@@ -457,6 +468,7 @@ class ForwardMesh:
         if explicit:
             left = self.parallel_dc(right=False)
             right = self.parallel_dc(right=True)
+            print(left, right)
         else:
             mzis = self.parallel_mzi_fn(use_jax=False, back=back)(thetas, phis)
 

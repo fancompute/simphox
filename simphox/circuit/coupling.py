@@ -1,4 +1,4 @@
-from typing import Union, List
+from typing import Tuple, Union, List
 
 import numpy as np
 from enum import Enum
@@ -20,9 +20,14 @@ def coupling_matrix_s(s: float):
     ])
 
 
+def loss2insertion(loss_db: float):
+    return np.sqrt(np.exp(np.log(10) * loss_db / 10))
+
+
 def coupling_matrix_phase(theta: float, split_error: float = 0, loss_error: float = 0):
-    return (1 - loss_error) * np.array([
-        [np.cos(theta / 2 + split_error / 2), 1j * np.sin(theta / 2 + split_error / 2)],
+    insertion = loss2insertion(loss_error)
+    return np.array([
+        [insertion * np.cos(theta / 2 + split_error / 2), insertion * 1j * np.sin(theta / 2 + split_error / 2)],
         [1j * np.sin(theta / 2 + split_error / 2), np.sin(theta / 2 + split_error / 2)]
     ])
 
@@ -56,7 +61,6 @@ class PhaseStyle(str, Enum):
     SYMMETRIC = 'symmetric'
 
 
-
 @fix_dataclass_init_docs
 @dataclass
 class CouplingNode:
@@ -64,8 +68,8 @@ class CouplingNode:
 
     Attributes:
         node_id: The index of the coupling node (useful in networks).
-        loss: The loss of the overall coupling node.
-        error: The splitting error of the coupling node (MZI coupling errors).
+        loss: The differential loss error of the overall coupling node in dB (one at each of the theta and phi phase shifters).
+        bs_error: The splitting error of the coupling node (MZI coupling errors).
         n: Total number of inputs/outputs.
         top: Top input/output index.
         bottom: Bottom input/output index.
@@ -75,9 +79,8 @@ class CouplingNode:
 
     """
     node_id: int = 0
-    loss: float = 0
-    error: float = 0
-    error_right: float = 0
+    loss: Tuple[float, float] = (0., 0.)
+    bs_error: Union[float, Tuple[float, float]] = 0.
     n: int = 2
     top: int = 0
     bottom: int = 1
@@ -89,14 +92,15 @@ class CouplingNode:
         self.stride = self.bottom - self.top
         self.top_descendants = np.array([])
         self.bot_descendants = np.array([])
+        self.bs_error = (self.bs_error, self.bs_error) if np.isscalar(self.bs_error) else self.bs_error
 
     @property
     def mzi_terms(self):
         return [
-            np.cos(np.pi / 4 + self.error_right) * np.cos(np.pi / 4 + self.error),
-            np.cos(np.pi / 4 + self.error_right) * np.sin(np.pi / 4 + self.error),
-            np.sin(np.pi / 4 + self.error_right) * np.cos(np.pi / 4 + self.error),
-            np.sin(np.pi / 4 + self.error_right) * np.sin(np.pi / 4 + self.error),
+            np.cos(np.pi / 4 + self.bs_error[1]) * np.cos(np.pi / 4 + self.bs_error[0]),
+            np.cos(np.pi / 4 + self.bs_error[1]) * np.sin(np.pi / 4 + self.bs_error[0]),
+            np.sin(np.pi / 4 + self.bs_error[1]) * np.cos(np.pi / 4 + self.bs_error[0]),
+            np.sin(np.pi / 4 + self.bs_error[1]) * np.sin(np.pi / 4 + self.bs_error[0]),
         ]
 
     def ideal_node(self, s: float = 0, phi: float = 0):
@@ -125,7 +129,7 @@ class CouplingNode:
             Tunable MMI node matrix embedded in an :math:`N`-waveguide system.
 
         """
-        mat = (1 - self.loss) * self.dc(right=True) @ phase_matrix(theta) @ self.dc(right=False) @ phase_matrix(phi)
+        mat = self.dc(right=True) @ phase_matrix(theta) @ self.dc(right=False) @ phase_matrix(phi)
         return _embed_2x2(mat, self.n, self.top, self.bottom) if embed else mat
 
     def phase_matrix(self, top: float = 0, bottom: float = 0):
@@ -151,9 +155,10 @@ class CouplingNode:
             A directional coupler matrix with error.
 
         """
-        error = (self.error, self.error_right)[right]
+        error = self.bs_error[right]
+        insertion = loss2insertion(self.loss[right])
         return np.array([
-            [np.cos(np.pi / 4 + error), 1j * np.sin(np.pi / 4 + error)],
+            [np.cos(np.pi / 4 + error) * insertion, 1j * np.sin(np.pi / 4 + error) * insertion],
             [1j * np.sin(np.pi / 4 + error), np.cos(np.pi / 4 + error)]
         ])
 
@@ -169,7 +174,7 @@ class CouplingNode:
             Tunable MMI node matrix embedded in an :math:`N`-waveguide system.
 
         """
-        mat = (1 - self.loss) * coupling_matrix_phase(theta, self.error, self.loss) @ phase_matrix(phi)
+        mat = coupling_matrix_phase(theta, self.bs_error, self.loss) @ phase_matrix(phi)
         return _embed_2x2(mat, self.n, self.top, self.bottom) if embed else mat
 
     def nullify(self, vector: np.ndarray, idx: int, lower_theta: bool = False, lower_phi: bool = False):
