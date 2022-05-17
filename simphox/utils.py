@@ -237,33 +237,35 @@ def splitter_metrics(sparams: xr.DataArray):
     }
 
 
-def random_vector(n: int, normed: bool = False):
+def random_vector(n: int, normed: bool = False, is_complex: bool = True):
     """Generate a random complex normal tensor.
 
     Args:
         n: Number of inputs.
         normed: Whether to norm the random complex vector so that the norm of the vector is 1.
+        is_complex: Return a complex vector
 
     Returns:
         The random complex normal vector.
 
     """
-    z = random_tensor(n)
+    z = random_tensor(n, is_complex)
     return z / np.linalg.norm(z) if normed else z
 
 
-def random_tensor(size: Union[int, Tuple]) -> np.ndarray:
+def random_tensor(size: Union[int, Tuple], is_complex: bool = True) -> np.ndarray:
     """Generate a random complex normal tensor.
 
     Args:
         size: Number of inputs or shape.
+        is_complex: Return a complex vector
 
     Returns:
-        The random complex normal tens0r.
+        The random complex normal tensor.
 
     """
     size = (int(size),) if np.isscalar(size) else size
-    return np.array(0.5 * np.random.randn(*size) + 0.5 * np.random.randn(*size) * 1j)
+    return np.array(0.5 * np.random.randn(*size) + 0.5 * np.random.randn(*size) * 1j) if is_complex else np.random.randn(*size)
 
 
 def random_unitary(n: int) -> np.ndarray:
