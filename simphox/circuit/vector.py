@@ -120,6 +120,7 @@ def _program_vector_unit(v: np.ndarray, network: ForwardMesh):
         The programmed vector unit
 
     """
+    v = v + 0j  # cast to complex
     thetas = np.zeros(v.shape[0] - 1)
     phis = np.zeros(v.shape[0] - 1)
     w = v.copy()

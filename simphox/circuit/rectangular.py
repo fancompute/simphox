@@ -1,4 +1,5 @@
 import numpy as np
+import jax.numpy as jnp
 
 try:
     DPHOX_IMPORTED = True
@@ -57,7 +58,7 @@ def get_alpha_checkerboard(n: int):
     return alpha_checkerboard
 
 
-def grid_common_mode_flow(external_phases: np.ndarray, gamma: np.ndarray):
+def grid_common_mode_flow(external_phases: np.ndarray, gamma: np.ndarray = None):
     """In a grid mesh (e.g., triangular, rectangular meshes), phases may need to be re-arranged.
      This is achieved using a procedure called "common mode flow" where common modes are shifted
      throughout the mesh until phases are correctly set.
@@ -70,6 +71,7 @@ def grid_common_mode_flow(external_phases: np.ndarray, gamma: np.ndarray):
         new external phases shifts and new gamma resulting
 
     """
+    gamma = np.zeros(external_phases.shape[1]) if gamma is None else gamma
     units, num_layers = external_phases.shape
     phase_shifts = np.hstack((external_phases, gamma[:, np.newaxis])).T
     new_phase_shifts = np.zeros_like(external_phases.T)
@@ -181,3 +183,17 @@ def rectangular_rows(rectangular_mesh: ForwardMesh):
                                         column=n - j - 1 if i % 2 else j))
     return [ForwardMesh(row).column_ordered for row in rows]
 
+
+def rectangular_phase_shift_powers(prop: np.ndarray, use_jax: bool = False):
+    xp = jnp if use_jax else np
+    n = prop.shape[1]
+    y = xp.abs(prop) ** 2
+    y = y / xp.sum(y, axis=1)[:, xp.newaxis]
+    phi_even = y[::8, ::2]
+    phi_odd = y[4::8, 1::2]
+    theta_even = y[2::8, ::2]
+    theta_odd = y[6::8, 1::2]
+    theta_p = xp.hstack([xp.hstack((theta_even[i], theta_odd[i]))[:-1] for i in range(n // 2)])
+    phi_p = xp.hstack([xp.hstack((phi_even[i], phi_odd[i]))[:-1] for i in range(n // 2)])
+    gamma_p = y[-1]
+    return theta_p, phi_p, gamma_p
