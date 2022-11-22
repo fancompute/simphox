@@ -22,7 +22,7 @@ from pydantic.dataclasses import dataclass
 
 from ..typing import List, PhaseParams, Union
 from ..utils import fix_dataclass_init_docs, normalized_error
-from .coupling import CouplingNode, PhaseStyle, transmissivity_to_phase, direct_transmissivity
+from .coupling import CouplingNode, loss2insertion, PhaseStyle, transmissivity_to_phase, direct_transmissivity
 from scipy.special import betaincinv
 
 
@@ -254,7 +254,8 @@ class ForwardMesh:
         """
         return ForwardMesh.aggregate(self.columns)
 
-    def add_error_mean(self, error: Union[float, np.ndarray] = 0, loss_db: Union[float, np.ndarray] = 0):
+    def add_error_mean(self, error: Union[float, np.ndarray] = 0, loss_db: Union[float, np.ndarray] = 0,
+                       error_right: Optional[Union[float, np.ndarray]] = None):
         """Add split error (in phase) and loss error (in dB) mean values to the circuit.
 
         Args:
