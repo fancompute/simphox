@@ -7,6 +7,7 @@ __pycache__
 .env
 .env*
 .idea
+.vscode
 .DS_Store
 data/*
 aim_lib/*
