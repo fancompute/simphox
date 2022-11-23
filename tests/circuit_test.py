@@ -1,6 +1,11 @@
 from itertools import product, zip_longest
 
 import numpy as np
+import jax
+import jax.numpy as jnp
+from jax import grad
+jax.config.update('jax_platform_name', 'cpu')
+
 import pytest
 from scipy.stats import unitary_group
 
@@ -133,3 +138,19 @@ def test_hessian_correlated_error(u: np.ndarray, balanced: bool):
         np.sum(hessian_vector_unit(u[0], balanced=True)),
         2 * np.linalg.norm(u[0] - vhat) ** 2 / 0.0001 ** 2, atol=1e-3
     )
+
+@pytest.mark.parametrize(
+    "u, input_type, all_analog", product(RAND_UNITARIES[:3], ['ones', 'id'], [True, False])
+)
+def test_in_situ_matrix_fn(u: np.ndarray, input_type: str, all_analog: bool):
+    mesh = rectangular(u)
+    inputs = jnp.ones(u.shape[0], dtype=jnp.complex128) if input_type == 'ones' else jnp.eye(u.shape[0], dtype=jnp.complex128)
+    in_situ_matrix_fn = mesh.in_situ_matrix_fn(all_analog=all_analog)
+    matrix_fn = mesh.matrix_fn(use_jax=True)
+    tr = lambda u: jnp.abs(u[0, 0]) ** 2
+    fn = lambda params: tr(matrix_fn(params, inputs))
+    in_situ_fn = lambda params: tr(in_situ_matrix_fn(params, inputs))
+    grad_fn = grad(fn)
+    grad_in_situ_fn = grad(in_situ_fn)
+    for expected, actual in zip(grad_in_situ_fn(mesh.params), grad_fn(mesh.params)):
+        np.testing.assert_allclose(expected, actual, atol=1e-8)
