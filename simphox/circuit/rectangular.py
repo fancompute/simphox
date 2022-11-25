@@ -1,14 +1,7 @@
 import numpy as np
 import jax.numpy as jnp
 
-try:
-    DPHOX_IMPORTED = True
-    from dphox.device import Device
-    from dphox.pattern import Pattern
-except ImportError:
-    DPHOX_IMPORTED = False
-
-from ..typing import Callable
+from ..typing import Callable, Union
 from .coupling import CouplingNode
 from .forward import ForwardMesh
 
@@ -98,7 +91,7 @@ def grid_common_mode_flow(external_phases: np.ndarray, gamma: np.ndarray = None)
     return np.mod(new_phase_shifts.T, 2 * np.pi), new_gamma
 
 
-def rectangular(u: np.ndarray, pbar: Callable = None):
+def rectangular(u: Union[int, np.ndarray], pbar: Callable = None):
     """Get a rectangular architecture for the unitary matrix :code:`u` using the Clements decomposition.
 
     Args:
@@ -169,7 +162,6 @@ def rectangular(u: np.ndarray, pbar: Callable = None):
 
     unit = ForwardMesh(nodes)
     unit.params = thetas, phis, gamma
-
     return unit
 
 
@@ -197,3 +189,7 @@ def rectangular_phase_shift_powers(prop: np.ndarray, use_jax: bool = False):
     phi_p = xp.hstack([xp.hstack((phi_even[i], phi_odd[i]))[:-1] for i in range(n // 2)])
     gamma_p = y[-1]
     return theta_p, phi_p, gamma_p
+
+def random_theta(n: int):
+    param = checkerboard_to_param(get_alpha_checkerboard(n), n)
+    return param.flatten() if n % 2 else np.hstack([np.hstack((pe, po))[:-1] for pe, po in zip(param[::2], param[1::2])])

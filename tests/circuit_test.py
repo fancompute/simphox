@@ -113,10 +113,10 @@ def test_program_null_basis(u: np.ndarray):
     "u", RAND_UNITARIES
 )
 def test_error_correction(u: np.ndarray):
-    tree = balanced_tree(u, error_mean_std=(0, 0.1))
-    x = tree.matrix()[-1]
+    tree = balanced_tree(u, bs_error_mean_std=(0, 0.1))
+    x = tree.matrix_fn()()[-1]
     tree_corrected = _program_vector_unit(x.conj(), copy.deepcopy(tree))[0]
-    np.testing.assert_allclose(np.abs(tree_corrected.matrix_fn(inputs=x.conj())(tree_corrected.params)[-1]), 1)
+    np.testing.assert_allclose(np.abs(tree_corrected.matrix_fn()(tree_corrected.params, x.conj())[-1]), 1)
 
 
 @pytest.mark.parametrize(
@@ -144,7 +144,7 @@ def test_hessian_correlated_error(u: np.ndarray, balanced: bool):
 )
 def test_in_situ_matrix_fn(u: np.ndarray, input_type: str, all_analog: bool):
     mesh = rectangular(u)
-    inputs = jnp.ones(u.shape[0], dtype=jnp.complex128) if input_type == 'ones' else jnp.eye(u.shape[0], dtype=jnp.complex128)
+    inputs = jnp.ones(u.shape[0], dtype=jnp.complex64) if input_type == 'ones' else jnp.eye(u.shape[0], dtype=jnp.complex64)
     in_situ_matrix_fn = mesh.in_situ_matrix_fn(all_analog=all_analog)
     matrix_fn = mesh.matrix_fn(use_jax=True)
     tr = lambda u: jnp.abs(u[0, 0]) ** 2
@@ -153,4 +153,4 @@ def test_in_situ_matrix_fn(u: np.ndarray, input_type: str, all_analog: bool):
     grad_fn = grad(fn)
     grad_in_situ_fn = grad(in_situ_fn)
     for expected, actual in zip(grad_in_situ_fn(mesh.params), grad_fn(mesh.params)):
-        np.testing.assert_allclose(expected, actual, atol=1e-8)
+        np.testing.assert_allclose(expected, actual, rtol=1e-5, atol=1e-6)

@@ -6,18 +6,20 @@ from jax import custom_vjp
 
 
 import jax.numpy as jnp
-from jax import value_and_grad, jit
+from jax import value_and_grad, jit, lax
 from jax.example_libraries.optimizers import adam
 import numpy as np
 import pandas as pd
 import haiku as hk
 
-from pydantic.dataclasses import dataclass
+# from pydantic.dataclasses import dataclass
 
 from ..typing import List, Union
 from ..utils import fix_dataclass_init_docs, normalized_error
 from .coupling import CouplingNode, PhaseStyle, transmissivity_to_phase, direct_transmissivity
 from scipy.special import betaincinv
+
+from dataclasses import dataclass
 
 
 @fix_dataclass_init_docs
@@ -39,14 +41,15 @@ class ForwardMesh:
     nodes: List[CouplingNode]
     phase_style: str = PhaseStyle.TOP
 
-    def __post_init_post_parse__(self):
+    # def __post_init_post_parse__(self):
+    def __post_init__(self):
         self.num_nodes = len(self.nodes)
-        self.top = tuple([int(node.top) for node in self.nodes])
-        self.bottom = tuple([int(node.bottom) for node in self.nodes])
+        self.top = [int(node.top) for node in self.nodes]
+        self.bottom = [int(node.bottom) for node in self.nodes]
         self.bs_errors = np.array([node.bs_error for node in self.nodes])
         self.losses = np.array([node.loss for node in self.nodes])
         self.mzi_terms = _mzi_terms(self.all_errors)
-        self.node_idxs = tuple([node.node_id for node in self.nodes])
+        self.node_idxs = [node.node_id for node in self.nodes]
         if np.sum(self.node_idxs) == 0:
             self.node_idxs = tuple(np.arange(len(self.nodes)).tolist())
             for node, idx in zip(self.nodes, self.node_idxs):
@@ -192,17 +195,17 @@ class ForwardMesh:
 
         """
 
-        node_columns = self.columns[::-1] if back else self.columns
+        ncs = self.columns[::-1] if back else self.columns
         xp = jnp if use_jax else np
+        all_idx = self.idx(back)
 
         # Define a function that represents an mzi column given inputs and all available thetas and phis
-        def matrix(params: Tuple[xp.ndarray, xp.ndarray, np.ndarray] = self.params, inputs=xp.eye(self.n, dtype=np.complex128),
-                   bs_errors=xp.array(self.all_errors), loss_errors=xp.array(self.all_losses)):
+        def matrix(params: Tuple[xp.ndarray, xp.ndarray, xp.ndarray] = self.params, inputs=xp.eye(self.n, dtype=np.complex64),
+                   bs_errors=xp.array(self.all_errors, dtype=np.complex64), loss_errors=xp.array(self.all_losses, dtype=np.complex64)):
 
             inputs += 0j  # cast to complex if not already
-            inputs = inputs[:, None] if inputs.ndim == 1 else inputs
             thetas, phis, gammas = params
-            outputs = xp.array(inputs.copy())
+            outputs = xp.array(inputs[:, None].copy() if inputs.ndim == 1 else inputs.copy())
             mzis = _parallel_mzi(
                 thetas, phis, bs_errors, loss_errors,
                 phase_style=self.phase_style, use_jax=use_jax, back=back
@@ -211,14 +214,307 @@ class ForwardMesh:
             if back:
                 outputs = (xp.exp(1j * gammas) * outputs.T).T
 
-            for nc in node_columns:
-                outputs = nc.parallel_transform(outputs, mzis, use_jax=use_jax)
+            if use_jax:
+                def body_fun(outputs, idx):
+                    return _parallel_transform(outputs, mzis, idx, use_jax=True), None
+                outputs, _ = lax.scan(body_fun, outputs, all_idx)
+            else:
+                for nc in ncs:
+                    outputs = nc.parallel_transform(outputs, mzis, use_jax=False)
 
             if not back:
                 outputs = (xp.exp(1j * gammas) * outputs.T).T
             return outputs
 
         return matrix
+
+    def idx(self, back: bool = False):
+        cols = self.columns
+        cols = cols[::-1] if back else cols
+        _top = [nc.top for nc in cols]
+        num_nodes = [nc.num_nodes for nc in cols]
+        m = np.max(num_nodes)
+        _bottom = [nc.bottom for nc in cols]
+        _node_idxs = [nc.node_idxs for nc in cols]
+        top = np.zeros((len(num_nodes), m), dtype=np.int)
+        bottom = np.zeros((len(num_nodes), m), dtype=np.int)
+        node_idxs = np.zeros((len(num_nodes), m), dtype=np.int)
+        mask = np.zeros((len(num_nodes), m), dtype=np.int)
+
+        for i, t in enumerate(_top):
+            top[i, :len(t)] = t
+        for i, t in enumerate(_bottom):
+            bottom[i, :len(t)] = t
+        for i, t in enumerate(_node_idxs):
+            node_idxs[i, :len(t)] = t
+        for i, t in enumerate(_node_idxs):
+            mask[i, :len(t)] = 1
+        
+        return top, bottom, node_idxs, mask
+
+    def propagate_matrix_fn(self, back: bool = False, column_cutoff: Optional[int] = None,
+                            explicit: bool = True, use_jax: bool = False):
+        """Return a function that propagates any given set of inputs through this circuit, returning the transfer matrix at each step.
+
+        Args:
+            inputs: Inputs for propagation of the modes through the mesh.
+            back: send the light backward (flip the mesh)
+            column_cutoff: The cutoff column where to start propagating (useful for nullification basis), default to all columns if None or use_jax True
+            explicit: Explicitly consider the directional couplers in the propagation.
+            use_jax: Whether to use jax to implement the propagation (accelerated performance!).
+
+        Returns:
+            Propagated fields
+
+        """
+        node_columns = self.columns[::-1] if back else self.columns
+        if column_cutoff is None:
+            column_cutoff = -1 if back else self.num_columns
+
+        xp = jnp if use_jax else np
+        all_idx = self.idx(back)
+
+        def propagate_matrix(params=self.params, inputs=xp.eye(self.n, dtype=np.complex64),
+                             bs_errors=xp.array(self.all_errors, dtype=np.complex64), loss_errors=xp.array(self.all_losses, dtype=np.complex64)):
+            thetas, phis, gammas = params
+            thetas, phis, gammas = xp.array(thetas), xp.array(phis), xp.array(gammas)
+            inputs = inputs + 0j  # cast to complex if not already
+            outputs = xp.array(inputs[:, None].copy() if inputs.ndim == 1 else inputs.copy())
+            propagated = [outputs.copy()[None]]
+
+            if back and column_cutoff == -1:
+                outputs = (xp.exp(1j * gammas) * outputs.T).T
+                propagated.append(outputs.copy()[None])
+
+            if explicit:
+                left = _parallel_dc(bs_errors, loss_errors, right=False, use_jax=use_jax)
+                right = _parallel_dc(bs_errors, loss_errors, right=True, use_jax=use_jax)
+            else:
+                mzis = _parallel_mzi(thetas, phis, bs_errors, loss_errors, use_jax=use_jax, back=back, phase_style=self.phase_style)
+
+            # get the matrix elements for all nodes in parallel
+            if use_jax:
+                if explicit:
+                    def parallel_propagate(carry, idx):
+                        return _parallel_propagate(carry, thetas, phis, left, right, idx,
+                                                   phase_style=self.phase_style, back=back, use_jax=True)
+                else:
+                    def parallel_propagate(carry, idx):
+                        carry = _parallel_transform(carry, mzis, idx, phase_style=self.phase_style, back=back, use_jax=True)
+                        return carry, carry[None]
+                outputs, _propagated = lax.scan(parallel_propagate, outputs, all_idx)
+                propagated.extend(_propagated)
+            else:
+                for nc in node_columns:
+                    if back and self.num_columns - column_cutoff < nc.column_by_node[0]:
+                        continue
+                    if not back and column_cutoff <= nc.column_by_node[0]:
+                        continue
+                    if explicit:
+                        outputs, _propagated = nc.parallel_propagate(outputs, thetas, phis, left, right, back=back, use_jax=False)
+                        propagated.extend(_propagated)
+                    else:
+                        outputs = nc.parallel_transform(outputs, mzis, use_jax=False)
+                        propagated.append(outputs.copy()[None])
+
+            if not back and column_cutoff == self.num_columns:
+                outputs = (xp.exp(1j * gammas) * outputs.T).T
+                propagated.append(outputs.copy()[None])
+            
+            return xp.vstack(propagated).squeeze() if explicit else xp.vstack(propagated)
+        return propagate_matrix
+
+    def parallel_propagate(self, outputs: np.ndarray, thetas: np.ndarray, phis: np.ndarray, left: np.ndarray, right: np.ndarray,
+                           back: bool = False, use_jax: bool = True):
+        return _parallel_propagate(outputs, thetas, phis, left, right,
+                                   (self.top, self.bottom, self.node_idxs, None), self.phase_style, back, use_jax)
+    
+
+    def in_situ_matrix_fn(self, tap_pd_shot_noise: float = 0, io_amp_error_std: float = 0, io_phase_error_std: float = 0, 
+                          all_analog: bool = True):
+        """A version of matrix function with in situ backpropagation registered as the "optical VJP."
+
+        Args:
+            tap_pd_shot_noise: Tap photodetector shot noise (proportional to power).
+            io_amp_error_std: Input/output amplitude error/noise standard deviation.
+            io_phase_error_std: Input/output phase error/noise standard deviation.
+            all_analog: All-analog implementation of backprop involves running the backward step by sending the adjoint field forward.
+
+        """
+        forward_matrix_fn = self.matrix_fn(use_jax=True, back=False)
+        backward_matrix_fn = self.matrix_fn(use_jax=True, back=True)
+        forward_prop_fn = self.propagate_matrix_fn(use_jax=True, back=False)
+        backward_prop_fn = self.propagate_matrix_fn(use_jax=True, back=True)
+
+        @custom_vjp
+        def matrix(params=self.params, inputs=jnp.eye(self.n, dtype=np.complex64),
+                   bs_errors=jnp.array(self.all_errors), loss_errors=jnp.array(self.all_losses)):
+            forward = forward_matrix_fn(params, inputs, bs_errors, loss_errors)
+            forward_inputs_abs = jnp.abs(jnp.abs(forward) + io_amp_error_std * np.random.randn(*forward.shape))
+            forward_inputs_phase = jnp.angle(forward) + io_phase_error_std * np.random.randn(*forward.shape)
+            forward = forward_inputs_abs * jnp.exp(1j * forward_inputs_phase)
+            return forward
+
+        def matrix_fwd(params, inputs, bs_errors, loss_errors):
+            # Returns primal output and residuals to be used in backward pass by f_bwd.
+            return matrix(params, inputs, bs_errors, loss_errors), (params, inputs, bs_errors, loss_errors)
+
+        def matrix_bwd(res, g):
+            params, inputs, bs_errors, loss_errors = res
+            forward = forward_prop_fn(params, inputs, bs_errors, loss_errors)
+
+            if all_analog:
+                # instead of using digital subtraction of backpropagating signals, use only forward prop'd signal
+                adjoint_inputs = backward_matrix_fn(params, g, bs_errors, loss_errors).squeeze()
+                adjoint_inputs_abs = jnp.abs(jnp.abs(adjoint_inputs) + io_amp_error_std * np.random.randn(*adjoint_inputs.shape))
+                adjoint_inputs_phase = jnp.angle(adjoint_inputs) + io_phase_error_std * np.random.randn(*adjoint_inputs.shape)
+                adjoint_inputs = adjoint_inputs_abs * jnp.exp(1j * adjoint_inputs_phase)
+                adjoint = forward_prop_fn(params, jnp.conj(adjoint_inputs), bs_errors, loss_errors)
+            else:
+                adjoint = backward_prop_fn(params, g, bs_errors, loss_errors)[::-1]
+                adjoint_inputs = adjoint[0]
+            sum = forward_prop_fn(params, inputs - 1j * jnp.conj(adjoint_inputs), bs_errors, loss_errors)
+
+            # gradient powers (subtracting sum signal by forward and adjoint), sqrt(3) since variances add.
+            grad_powers = jnp.abs(sum) ** 2 - jnp.abs(forward) ** 2 - jnp.abs(adjoint) ** 2 + np.sqrt(3) * tap_pd_shot_noise * np.random.randn(*forward.shape)
+
+            # returns the grad powers at the various gradient positions and adjoint inputs (needed to propagate errors backward to prev layer)
+            return (self.phase_shift_localize(grad_powers / 2), adjoint_inputs, jnp.zeros_like(bs_errors), jnp.zeros_like(loss_errors))
+
+        matrix.defvjp(matrix_fwd, matrix_bwd)
+        return matrix
+
+    def propagate(self, inputs: Optional[np.ndarray] = None, back: bool = False,
+                  column_cutoff: Optional[int] = None, explicit: bool = True):
+        """Propagate :code:`inputs` through the mesh
+
+        Args:
+            inputs: Inputs for propagation of the modes through the mesh.
+            back: send the light backward (flip the mesh)
+            column_cutoff: The cutoff column where to start propagating (useful for nullification basis)
+            params: parameters to use for the propagation (if :code:`None`, use the default params attribute).
+            explicit: Explicitly consider the directional couplers in the propagation.
+            use_jax: Whether to use jax to implement the propagation.
+
+        Returns:
+            Propagated fields
+
+        """
+        return self.propagate_matrix_fn(back=back, column_cutoff=column_cutoff, explicit=explicit, use_jax=False)(inputs=inputs)
+
+    @property
+    def nullification_basis(self):
+        """The nullificuation basis for parallel nullification and error correction of non-self-configurable
+        architectures.
+
+        Returns:
+            The nullification basis for the architecture based on the internal thetas, phis, and gammas.
+
+        """
+        node_columns = self.columns
+        null_vecs = []
+        for nc in node_columns:
+            vector = np.zeros(self.n, dtype=np.complex64)
+            vector[nc.bottom] = 1
+            null_vecs.append(
+                self.propagate(
+                    vector[:, np.newaxis],
+                    column_cutoff=self.num_columns - nc.column_by_node[0],
+                    back=True, explicit=False)[-1]
+            )
+        return np.array(null_vecs)[..., 0].conj()
+
+    def program_by_null_basis(self, nullification_basis: np.ndarray):
+        """Parallel program the mesh using the null basis.
+
+        Args:
+            nullification_basis: The nullification basis for the photonic mesh network.
+
+        Returns:
+            The parameters to be programmed
+
+        """
+
+        node_columns = self.columns
+        for nc, w in zip(node_columns, nullification_basis):
+            vector = self.propagate(w.copy(), column_cutoff=nc.column_by_node[0], explicit=False)[-1]
+            theta, phi = nc.parallel_nullify(vector, self.mzi_terms)
+            self.thetas[nc.node_idxs] = theta
+            self.phis[nc.node_idxs] = np.mod(phi, 2 * np.pi)
+
+    def parallel_nullify(self, vector: np.ndarray, mzi_terms: np.ndarray):
+        """Assuming the mesh is a column, this method runs a parallel nullify algorithm to set up
+        the elements of the column in parallel.
+
+        Args:
+            vector: The vector entering the column.
+            mzi_terms: The MZI terms account for errors in the couplers of the photonic circuit.
+
+        Returns:
+            The programmed phases
+
+        """
+        top = vector[self.top]
+        bottom = vector[self.bottom]
+        mzi_terms = mzi_terms.T[self.node_idxs].T
+        cc, cs, sc, ss = mzi_terms
+        if self.phase_style == PhaseStyle.SYMMETRIC:
+            raise NotImplementedError('Require phase_style not be of the SYMMETRIC variety.')
+        elif self.phase_style == PhaseStyle.BOTTOM:
+            theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
+            phi = np.angle(top[:, -1]) - np.angle(bottom[:, -1]) + np.pi
+            phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
+        else:
+            theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
+            phi = np.angle(bottom[:, -1]) - np.angle(top[:, -1])
+            phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
+        return theta, phi
+
+    @property
+    def params(self):
+        return (self.thetas.copy(), self.phis.copy(), self.gammas.copy())
+
+    @params.setter
+    def params(self, params: Tuple[np.ndarray, np.ndarray, np.ndarray]):
+        self.thetas, self.phis, self.gammas = params
+
+    def phases(self, error: np.ndarray = 0, constant: bool = False, gamma_error: bool = False):
+        """
+
+        Args:
+            error: Error in the phases.
+            constant: Whether the phase error should be constant.
+            gamma_error: The error in gamma (output phases).
+
+        Returns:
+            The phases
+
+        """
+        errors = error if constant else error * np.random.randn(self.thetas.size)
+        g_errors = error if constant else error * np.random.randn(self.gammas.size)
+        return self.thetas + errors, self.phis + errors, self.gammas + g_errors * gamma_error
+    
+    def phase_shift_localize(self, prop_powers: np.ndarray, use_jax: bool = True):
+        xp = jnp if use_jax else np
+        if prop_powers.ndim == 3:
+            return (
+                xp.vstack([prop_powers[i * 4 + 2, nc.top] for i, nc in enumerate(self.columns)]).sum(axis=-1),
+                xp.vstack([prop_powers[i * 4, nc.top] for i, nc in enumerate(self.columns)]).sum(axis=-1),
+                prop_powers[-1].sum(axis=-1)
+            )
+        elif prop_powers.ndim == 2:
+            return (
+                xp.hstack([prop_powers[i * 4 + 2, nc.top] for i, nc in enumerate(self.columns)]),
+                xp.hstack([prop_powers[i * 4, nc.top] for i, nc in enumerate(self.columns)]),
+                prop_powers[-1]
+            )
+    
+    def parallel_mzi(self, thetas: np.ndarray = None, phis: np.ndarray = None, phase_style: PhaseStyle = None, use_jax: bool = False, back: bool = False):
+        phase_style = self.phase_style if phase_style is None else phase_style
+        thetas = self.params[0] if thetas is None else thetas
+        phis = self.params[0] if phis is None else phis
+        return _parallel_mzi(thetas, phis, self.all_errors, self.all_losses, phase_style, use_jax, back)
+
 
     @property
     def column_ordered(self):
@@ -330,268 +626,8 @@ class ForwardMesh:
         return init, update_fn, get_params
 
     def parallel_transform(self, v: np.ndarray, matrix_elements: np.ndarray, use_jax: bool = False):
-        return _parallel_transform(v, matrix_elements, self.top, self.bottom, self.node_idxs, use_jax)
-    
-    def parallel_multiply(self, v: np.ndarray, phases: np.ndarray, use_jax: bool = False):
-        if use_jax:
-            return v.at[(self.top,)].set(v[(self.top,)] * jnp.exp(1j * phases[(self.node_idxs,)][:, np.newaxis]))
-        else:
-            v[(self.top,)] *= np.exp(1j * phases[(self.node_idxs,)][:, np.newaxis])
-            return v
-
-    def propagate_matrix_fn(self, back: bool = False, column_cutoff: Optional[int] = None,
-                            explicit: bool = True, use_jax: bool = False):
-        """Propagate :code:`inputs` through the mesh
-
-        Args:
-            inputs: Inputs for propagation of the modes through the mesh.
-            back: send the light backward (flip the mesh)
-            column_cutoff: The cutoff column where to start propagating (useful for nullification basis), default to all columns if None.
-            explicit: Explicitly consider the directional couplers in the propagation.
-            use_jax: Whether to use jax to implement the propagation (accelerated performance!).
-
-        Returns:
-            Propagated fields
-
-        """
-        node_columns = self.columns[::-1] if back else self.columns
-        if column_cutoff is None:
-            column_cutoff = -1 if back else self.num_columns
-
-        xp = jnp if use_jax else np
-
-        def propagate_matrix(params=self.params, inputs=xp.eye(self.n, dtype=np.complex128),
-                             bs_errors=xp.array(self.all_errors), loss_errors=xp.array(self.all_losses)):
-            thetas, phis, gammas = params
-            inputs = inputs + 0j  # cast to complex if not already
-            inputs = inputs[:, None] if inputs.ndim == 1 else inputs
-            outputs = inputs.copy()
-            propagated = [outputs.copy()]
-
-            if back and column_cutoff == -1:
-                outputs = (xp.exp(1j * gammas) * outputs.T).T
-                propagated.append(outputs.copy())
-
-            if explicit:
-                left = _parallel_dc(bs_errors, loss_errors, right=False, use_jax=use_jax)
-                right = _parallel_dc(bs_errors, loss_errors, right=True, use_jax=use_jax)
-            else:
-                mzis = _parallel_mzi(thetas, phis, bs_errors, loss_errors, use_jax=use_jax, back=back, phase_style=self.phase_style)
-
-            # get the matrix elements for all nodes in parallel
-            for nc in node_columns:
-                if back and (nc.column_by_node.size == 0 or self.num_columns - column_cutoff < nc.column_by_node[0]):
-                    continue
-                if not back and (nc.column_by_node.size == 0 or column_cutoff <= nc.column_by_node[0]):
-                    continue
-
-                if explicit:
-                    if back:
-                        outputs = nc.parallel_transform(outputs, right, use_jax=use_jax)
-                        propagated.append(outputs.copy())
-                        outputs = nc.parallel_multiply(outputs, thetas, use_jax=use_jax)
-                        propagated.append(outputs.copy())
-                        outputs = nc.parallel_transform(outputs, left, use_jax=use_jax)
-                        propagated.append(outputs.copy())
-                        outputs = nc.parallel_multiply(outputs, phis, use_jax=use_jax)
-                        propagated.append(outputs.copy())
-                    else:
-                        outputs = nc.parallel_multiply(outputs, phis, use_jax=use_jax)
-                        propagated.append(outputs.copy())
-                        outputs = nc.parallel_transform(outputs, left, use_jax=use_jax)
-                        propagated.append(outputs.copy())
-                        outputs = nc.parallel_multiply(outputs, thetas, use_jax=use_jax)
-                        propagated.append(outputs.copy())
-                        outputs = nc.parallel_transform(outputs, right, use_jax=use_jax)
-                        propagated.append(outputs.copy())
-                else:
-                    outputs = nc.parallel_transform(outputs, mzis, use_jax=use_jax)
-                    propagated.append(outputs.copy())
-
-            if not back and column_cutoff == self.num_columns:
-                outputs = (xp.exp(1j * gammas) * outputs.T).T
-                propagated.append(outputs.copy())
-            return xp.array(propagated).squeeze() if explicit else xp.array(propagated)
-        return propagate_matrix
-    
-    def propagate(self, inputs: Optional[np.ndarray] = None, back: bool = False,
-                  column_cutoff: Optional[int] = None, explicit: bool = True):
-        """Propagate :code:`inputs` through the mesh
-
-        Args:
-            inputs: Inputs for propagation of the modes through the mesh.
-            back: send the light backward (flip the mesh)
-            column_cutoff: The cutoff column where to start propagating (useful for nullification basis)
-            params: parameters to use for the propagation (if :code:`None`, use the default params attribute).
-            explicit: Explicitly consider the directional couplers in the propagation.
-            use_jax: Whether to use jax to implement the propagation.
-
-        Returns:
-            Propagated fields
-
-        """
-        return self.propagate_matrix_fn(back=back, column_cutoff=column_cutoff, explicit=explicit, use_jax=False)(inputs=inputs)
-
-    @property
-    def nullification_basis(self):
-        """The nullificuation basis for parallel nullification and error correction of non-self-configurable
-        architectures.
-
-        Returns:
-            The nullification basis for the architecture based on the internal thetas, phis, and gammas.
-
-        """
-        node_columns = self.columns
-        null_vecs = []
-        for nc in node_columns:
-            vector = np.zeros(self.n, dtype=np.complex128)
-            vector[(nc.bottom,)] = 1
-            null_vecs.append(
-                self.propagate(
-                    vector[:, np.newaxis],
-                    column_cutoff=self.num_columns - nc.column_by_node[0],
-                    back=True, explicit=False)[-1]
-            )
-        return np.array(null_vecs)[..., 0].conj()
-
-    def program_by_null_basis(self, nullification_basis: np.ndarray):
-        """Parallel program the mesh using the null basis.
-
-        Args:
-            nullification_basis: The nullification basis for the photonic mesh network.
-
-        Returns:
-            The parameters to be programmed
-
-        """
-
-        node_columns = self.columns
-        for nc, w in zip(node_columns, nullification_basis):
-            vector = self.propagate(w.copy(), column_cutoff=nc.column_by_node[0], explicit=False)[-1]
-            theta, phi = nc.parallel_nullify(vector, self.mzi_terms)
-            self.thetas[(nc.node_idxs,)] = theta
-            self.phis[(nc.node_idxs,)] = np.mod(phi, 2 * np.pi)
-
-    def parallel_nullify(self, vector: np.ndarray, mzi_terms: np.ndarray):
-        """Assuming the mesh is a column, this method runs a parallel nullify algorithm to set up
-        the elements of the column in parallel.
-
-        Args:
-            vector: The vector entering the column.
-            mzi_terms: The MZI terms account for errors in the couplers of the photonic circuit.
-
-        Returns:
-            The programmed phases
-
-        """
-        top = vector[(self.top,)]
-        bottom = vector[(self.bottom,)]
-        mzi_terms = mzi_terms.T[(self.node_idxs,)].T
-        cc, cs, sc, ss = mzi_terms
-        if self.phase_style == PhaseStyle.SYMMETRIC:
-            raise NotImplementedError('Require phase_style not be of the SYMMETRIC variety.')
-        elif self.phase_style == PhaseStyle.BOTTOM:
-            theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
-            phi = np.angle(top[:, -1]) - np.angle(bottom[:, -1]) + np.pi
-            phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
-        else:
-            theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
-            phi = np.angle(bottom[:, -1]) - np.angle(top[:, -1])
-            phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
-        return theta, phi
-
-    @property
-    def params(self):
-        return (self.thetas.copy(), self.phis.copy(), self.gammas.copy())
-
-    @params.setter
-    def params(self, params: Tuple[np.ndarray, np.ndarray, np.ndarray]):
-        self.thetas, self.phis, self.gammas = params
-
-    def phases(self, error: np.ndarray = 0, constant: bool = False, gamma_error: bool = False):
-        """
-
-        Args:
-            error: Error in the phases.
-            constant: Whether the phase error should be constant.
-            gamma_error: The error in gamma (output phases).
-
-        Returns:
-            The phases
-
-        """
-        errors = error if constant else error * np.random.randn(self.thetas.size)
-        g_errors = error if constant else error * np.random.randn(self.gammas.size)
-        return self.thetas + errors, self.phis + errors, self.gammas + g_errors * gamma_error
-    
-    def phase_shift_localize(self, prop_powers: np.ndarray, use_jax: bool = True):
-        xp = jnp if use_jax else np
-        if prop_powers.ndim == 3:
-            return (
-                xp.vstack([prop_powers[i * 4 + 2, nc.top] for i, nc in enumerate(self.columns)]).sum(axis=-1),
-                xp.vstack([prop_powers[i * 4, nc.top] for i, nc in enumerate(self.columns)]).sum(axis=-1),
-                prop_powers[-1].sum(axis=-1)
-            )
-        elif prop_powers.ndim == 2:
-            return (
-                xp.hstack([prop_powers[i * 4 + 2, nc.top] for i, nc in enumerate(self.columns)]),
-                xp.hstack([prop_powers[i * 4, nc.top] for i, nc in enumerate(self.columns)]),
-                prop_powers[-1]
-            )
-
-    def in_situ_matrix_fn(self, tap_pd_shot_noise: float = 0, io_amp_error_std: float = 0, io_phase_error_std: float = 0, 
-                          all_analog: bool = True):
-        """A version of matrix function with in situ backpropagation registered as the "optical VJP."
-
-        Args:
-            tap_pd_shot_noise: Tap photodetector shot noise (proportional to power).
-            io_amp_error_std: Input/output amplitude error/noise standard deviation.
-            io_phase_error_std: Input/output phase error/noise standard deviation.
-            all_analog: All-analog implementation of backprop involves running the backward step by sending the adjoint field forward.
-
-        """
-        forward_matrix_fn = self.matrix_fn(use_jax=True, back=False)
-        backward_matrix_fn = self.matrix_fn(use_jax=True, back=True)
-        forward_prop_fn = self.propagate_matrix_fn(use_jax=True, back=False)
-        backward_prop_fn = self.propagate_matrix_fn(use_jax=True, back=True)
-
-        @custom_vjp
-        def matrix(params=self.params, inputs=jnp.eye(self.n, dtype=np.complex128),
-                   bs_errors=jnp.array(self.all_errors), loss_errors=jnp.array(self.all_losses)):
-            forward = forward_matrix_fn(params, inputs, bs_errors, loss_errors)
-            forward_inputs_abs = jnp.abs(jnp.abs(forward) + io_amp_error_std * np.random.randn(*forward.shape))
-            forward_inputs_phase = jnp.angle(forward) + io_phase_error_std * np.random.randn(*forward.shape)
-            return forward_inputs_abs * jnp.exp(1j * forward_inputs_phase)
-
-        def matrix_fwd(params, inputs, bs_errors, loss_errors):
-            # Returns primal output and residuals to be used in backward pass by f_bwd.
-            return matrix(params, inputs, bs_errors, loss_errors), (params, inputs, bs_errors, loss_errors)
-
-        def matrix_bwd(res, g):
-            params, inputs, bs_errors, loss_errors = res
-            forward = forward_prop_fn(params, inputs, bs_errors, loss_errors)
-
-            if all_analog:
-                # instead of using digital subtraction of backpropagating signals, use only forward prop'd signal
-                adjoint_inputs = backward_matrix_fn(params, g, bs_errors, loss_errors).squeeze()
-                adjoint_inputs_abs = jnp.abs(jnp.abs(adjoint_inputs) + io_amp_error_std * np.random.randn(*adjoint_inputs.shape))
-                adjoint_inputs_phase = jnp.angle(adjoint_inputs) + io_phase_error_std * np.random.randn(*adjoint_inputs.shape)
-                adjoint_inputs = adjoint_inputs_abs * jnp.exp(1j * adjoint_inputs_phase)
-                adjoint = forward_prop_fn(params, jnp.conj(adjoint_inputs), bs_errors, loss_errors)
-            else:
-                adjoint = backward_prop_fn(params, g, bs_errors, loss_errors)[::-1]
-                adjoint_inputs = adjoint[0]
-            sum = forward_prop_fn(params, inputs - 1j * jnp.conj(adjoint_inputs), bs_errors, loss_errors)
-
-            # gradient powers (subtracting sum signal by forward and adjoint), sqrt(3) since variances add.
-            grad_powers = jnp.abs(sum) ** 2 - jnp.abs(forward) ** 2 - jnp.abs(adjoint) ** 2 + np.sqrt(3) * tap_pd_shot_noise * np.random.randn(*forward.shape)
-
-            # returns the grad powers at the various gradient positions and adjoint inputs (needed to propagate errors backward to prev layer)
-            return (self.phase_shift_localize(grad_powers / 2), adjoint_inputs, jnp.zeros_like(bs_errors), jnp.zeros_like(loss_errors))
-
-        matrix.defvjp(matrix_fwd, matrix_bwd)
-        return matrix
-
+        return _parallel_transform(v, matrix_elements,
+                                   (self.top, self.bottom, self.node_idxs, None), use_jax=use_jax)
 
 
 def _parallel_mzi(theta: np.ndarray, phi: np.ndarray,
@@ -671,32 +707,76 @@ def _parallel_dc(bs_errors: np.ndarray, loss_errors: np.ndarray, right: bool = F
 def _mzi_terms(bs_errors: np.ndarray, use_jax: bool = False):
     xp = jnp if use_jax else np
     bs_error_l, bs_error_r = bs_errors.T
-    return (xp.cos(np.pi / 4 + bs_error_r) * xp.cos(np.pi / 4 + bs_error_l),
+    return xp.array((xp.cos(np.pi / 4 + bs_error_r) * xp.cos(np.pi / 4 + bs_error_l),
             xp.cos(np.pi / 4 + bs_error_r) * xp.sin(np.pi / 4 + bs_error_l),
             xp.sin(np.pi / 4 + bs_error_r) * xp.cos(np.pi / 4 + bs_error_l),
-            xp.sin(np.pi / 4 + bs_error_r) * xp.sin(np.pi / 4 + bs_error_l))
+            xp.sin(np.pi / 4 + bs_error_r) * xp.sin(np.pi / 4 + bs_error_l)))
 
-def _parallel_transform(v: np.ndarray, matrix_elements: np.ndarray, top: List[int], bottom: List[int], node_idxs: List[int], use_jax: bool):
+
+def _parallel_transform(v: np.ndarray, matrix_elements: np.ndarray, idx: np.ndarray, use_jax: bool = False):
     t11, t12, t21, t22 = matrix_elements
-    _top = v[(top,)]
-    _bottom = v[(bottom,)]
-    s11, s12 = t11[(node_idxs,)][:, np.newaxis], t12[(node_idxs,)][:, np.newaxis]
-    s21, s22 = t21[(node_idxs,)][:, np.newaxis], t22[(node_idxs,)][:, np.newaxis]
+    top, bottom, node_idxs, mask = idx
+
+    _top = v[top]
+    _bottom = v[bottom]
+    s11, s12 = t11[node_idxs][:, np.newaxis], t12[node_idxs][:, np.newaxis]
+    s21, s22 = t21[node_idxs][:, np.newaxis], t22[node_idxs][:, np.newaxis]
     if use_jax:
-        return v.at[(top + bottom,)].set(
-            jnp.vstack([s11 * _top + s21 * _bottom,
-                        s12 * _top + s22 * _bottom])
+        mask = mask[:, np.newaxis]
+        s11 = s11 * mask + (1 - mask)
+        s22 = s22 * mask + (1 - mask)
+        s12 = s12 * mask
+        s21 = s21 * mask
+        return v.at[jnp.hstack((top, bottom))].set(
+            jnp.vstack((s11 * _top + s21 * _bottom,
+                        s12 * _top + s22 * _bottom))
         )
     else:
-        v[(top + bottom,)] = np.vstack([
+        v[top + bottom] = np.vstack([
             s11 * _top + s21 * _bottom,
             s12 * _top + s22 * _bottom
         ])
         return v
 
 
-class MeshLayer(hk.Module):
-    def __init__(self, mesh: ForwardMesh, activation: callable = None, name: str=None,
+def _parallel_multiply(v: np.ndarray, phases: np.ndarray, idx: np.ndarray, phase_style: PhaseStyle, use_jax: bool = False):
+    top, bottom, node_idxs, mask = idx
+    if phase_style != PhaseStyle.TOP and phase_style !=PhaseStyle.BOTTOM:
+        raise ValueError(f"Phase style must be TOP or BOTTOM, phase style {phase_style} is not yet supported.")
+    idx = top if phase_style == PhaseStyle.TOP else bottom
+    if use_jax:
+        phasors = jnp.exp(1j * phases[node_idxs] * mask)
+        return v.at[idx].set(v[idx] * phasors[:, np.newaxis])
+    else:
+        v[idx] *= np.exp(1j * phases[node_idxs])[:, np.newaxis]
+        return v
+
+def _parallel_propagate(inputs: np.ndarray, thetas: np.ndarray, phis: np.ndarray, left: np.ndarray, right: np.ndarray,
+                        idx: np.ndarray, phase_style: PhaseStyle, back: bool = False, use_jax: bool = True):
+    propagated = []
+    if back:
+        v1 = _parallel_transform(inputs, right, idx, use_jax=use_jax)
+        propagated.append(v1[None] if use_jax else v1.copy()[None])
+        v2 = _parallel_multiply(v1, thetas, idx, phase_style=phase_style, use_jax=use_jax)
+        propagated.append(v2[None] if use_jax else v2.copy()[None])
+        v3 = _parallel_transform(v2, left, idx, use_jax=use_jax)
+        propagated.append(v3[None] if use_jax else v3.copy()[None])
+        outputs = _parallel_multiply(v3, phis, idx, phase_style=phase_style, use_jax=use_jax)
+        propagated.append(outputs[None] if use_jax else outputs.copy()[None])
+    else:
+        v1 = _parallel_multiply(inputs, phis, idx, phase_style=phase_style, use_jax=use_jax)
+        propagated.append(v1[None] if use_jax else v1.copy()[None])
+        v2 = _parallel_transform(v1, left, idx, use_jax=use_jax)
+        propagated.append(v2[None] if use_jax else v2.copy()[None])
+        v3 = _parallel_multiply(v2, thetas, idx, phase_style=phase_style, use_jax=use_jax)
+        propagated.append(v3[None] if use_jax else v3.copy()[None])
+        outputs = _parallel_transform(v3, right, idx, use_jax=use_jax)
+        propagated.append(outputs[None] if use_jax else outputs.copy()[None])
+    return outputs, jnp.vstack(propagated) if use_jax else propagated
+
+class InSituBackpropLayer(hk.Module):
+    def __init__(self, mesh: ForwardMesh, in_situ_matrix: callable = None,
+                 activation: callable = None, name: str=None,
                  tap_pd_shot_noise: float = 0, io_amp_error_std: float = 0,
                  io_phase_error_std: float = 0, all_analog: bool = True,
                  set_gammas_zero: bool = True, use_jit: bool = True):
@@ -704,6 +784,7 @@ class MeshLayer(hk.Module):
 
         Args:
             mesh: Feedforward mesh
+            in_situ_matrix: Callable (use to avoid recompiling layers that do not need to be recompiled)
             activation: Activation
             name: Name of the mesh layer
             tap_pd_shot_noise: Tap photodetector shot noise (should be proportional to power)
@@ -718,8 +799,13 @@ class MeshLayer(hk.Module):
         self.output_size = self.n = mesh.n
         if set_gammas_zero:
             self.mesh.gammas = np.zeros_like(self.mesh.gammas) # useful hack for this demo
-        self.matrix = self.mesh.in_situ_matrix_fn(tap_pd_shot_noise, io_amp_error_std, io_phase_error_std, all_analog)
-        self.matrix = jit(self.matrix) if use_jit else self.matrix
+        
+        if in_situ_matrix is None:
+            self.matrix = self.mesh.in_situ_matrix_fn(tap_pd_shot_noise, io_amp_error_std, io_phase_error_std, all_analog)
+            self.matrix = jit(self.matrix) if use_jit else self.matrix
+        else:
+            self.matrix = in_situ_matrix
+
         self.activation = activation if activation is not None else (lambda x: x)
 
     def __call__(self, x):

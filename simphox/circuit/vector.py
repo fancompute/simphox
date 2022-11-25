@@ -133,7 +133,7 @@ def _program_vector_unit(v: np.ndarray, network: ForwardMesh):
         theta, phi = nc.parallel_nullify(w, network.mzi_terms)
 
         # Vectorized (efficient!) parallel mzi elements
-        t11, t12, t21, t22 = nc.parallel_mzi_fn(mzi_terms=network.mzi_terms)(theta, phi)
+        t11, t12, t21, t22 = nc.parallel_mzi(theta, phi)
         t11, t12, t21, t22 = t11[:, np.newaxis], t12[:, np.newaxis], t21[:, np.newaxis], t22[:, np.newaxis]
 
         # these are the top port powers before nulling
@@ -161,7 +161,7 @@ def _program_vector_unit(v: np.ndarray, network: ForwardMesh):
 
 
 def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase_style: str = PhaseStyle.TOP,
-                error_mean_std: Tuple[float, float] = (0., 0.), loss_mean_std: Tuple[float, float] = (0., 0.)):
+                bs_error_mean_std: Tuple[float, float] = (0., 0.), loss_mean_std: Tuple[float, float] = (0., 0.)):
     """Generate an architecture based on our recursive definitions programmed to implement normalized vector :code:`v`.
 
     Args:
@@ -169,14 +169,14 @@ def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase
         n_rails: Embed the first :code:`n` rails in an :code:`n_rails`-rail system (default :code:`n_rails == n`).
         balanced: If balanced, does balanced tree (:code:`m = n // 2`) otherwise linear chain (:code:`m = n - 1`).
         phase_style: Phase style for the nodes (see the :code:`PhaseStyle` enum).
-        error_mean_std: Mean and standard deviation for errors (in radians).
+        bs_error_mean_std: Mean and standard deviation for beamsplitter errors (in radians).
         loss_mean_std: Mean and standard deviation for losses (in dB).
 
     Returns:
         A tuple of the programmed coupling network, the matrix after being fed through the network.
     """
     network = tree(v.shape[0] if not np.isscalar(v) else v, n_rails=n_rails, balanced=balanced, phase_style=phase_style)
-    error_mean, error_std = error_mean_std
+    error_mean, error_std = bs_error_mean_std
     loss_mean, loss_std = loss_mean_std
     network = network.add_error_mean(error_mean, loss_mean).add_error_variance(error_std, loss_std)
     if np.isscalar(v):
@@ -185,32 +185,32 @@ def vector_unit(v: np.ndarray, n_rails: int = None, balanced: bool = True, phase
 
 
 def balanced_tree(v: np.ndarray, phase_style: str = PhaseStyle.TOP,
-                  error_mean_std: Tuple[float, float] = (0., 0.),
+                  bs_error_mean_std: Tuple[float, float] = (0., 0.),
                   loss_mean_std: Tuple[float, float] = (0., 0.)):
     """Balanced tree mesh that analyzes a vector :code:`v`.
 
     Args:
-        v: Vector unit
+        v: Vector unit.
         phase_style: Phase style for the nodes of the mesh.
-        error_mean_std: Split error mean and standard deviation
-        loss_mean_std: Loss error mean and standard deviation (dB)
+        bs_error_mean_std: Mean and standard deviation for beamsplitter errors (in radians).
+        loss_mean_std: Mean and standard deviation for losses (in dB).
 
     Returns:
         A tree mesh object analyzing a vector.
 
     """
     return vector_unit(v.conj().T if not np.isscalar(v) else v,
-                       phase_style=phase_style, error_mean_std=error_mean_std, loss_mean_std=loss_mean_std)[0]
+                       phase_style=phase_style, bs_error_mean_std=bs_error_mean_std, loss_mean_std=loss_mean_std)[0]
 
 
-def unbalanced_tree(v: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean_std: Tuple[float, float] = (0., 0.),
+def unbalanced_tree(v: np.ndarray, phase_style: str = PhaseStyle.TOP, bs_error_mean_std: Tuple[float, float] = (0., 0.),
                     loss_mean_std: Tuple[float, float] = (0., 0.)):
     """Linear chain that analyzes a vector :code:`v`.
 
     Args:
         v: Vector unit
         phase_style: Phase style for the nodes of the mesh.
-        error_mean_std: Split error mean and standard deviation
+        bs_error_mean_std: Split error mean and standard deviation
         loss_mean_std: Loss error mean and standard deviation (dB)
 
     Returns:
@@ -218,7 +218,7 @@ def unbalanced_tree(v: np.ndarray, phase_style: str = PhaseStyle.TOP, error_mean
 
     """
     return vector_unit(v.conj().T if not np.isscalar(v) else v,
-                       phase_style=phase_style, error_mean_std=error_mean_std, loss_mean_std=loss_mean_std,
+                       phase_style=phase_style, bs_error_mean_std=bs_error_mean_std, loss_mean_std=loss_mean_std,
                        balanced=False)[0]
 
 
@@ -289,7 +289,7 @@ def hessian_fd(v: np.ndarray, error=0.0001, balanced=False):
     mesh = balanced_tree(v) if balanced else unbalanced_tree(v)
 
     def err(params):
-        return 2 - 2 * mesh.matrix_fn(inputs=v.conj())(params)[-1]
+        return 2 - 2 * mesh.matrix_fn()(params, v.conj())[-1]
 
     for i in range(n - 1):
         for j in range(n - 1):
