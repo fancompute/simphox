@@ -51,7 +51,7 @@ class ForwardMesh:
         self.mzi_terms = _mzi_terms(self.all_errors)
         self.node_idxs = [node.node_id for node in self.nodes]
         if np.sum(self.node_idxs) == 0:
-            self.node_idxs = tuple(np.arange(len(self.nodes)).tolist())
+            self.node_idxs = np.arange(len(self.nodes)).tolist()
             for node, idx in zip(self.nodes, self.node_idxs):
                 node.node_id = idx
         self.n = self.nodes[0].n if len(self.nodes) > 0 else 1
@@ -229,6 +229,13 @@ class ForwardMesh:
         return matrix
 
     def idx(self, back: bool = False):
+        """Returns a JAX-friendly index representation ofthe forward mesh.
+
+        Args:
+            Whether to run the mesh backwards
+
+        """
+        n = self.n
         cols = self.columns
         cols = cols[::-1] if back else cols
         _top = [nc.top for nc in cols]
@@ -241,10 +248,19 @@ class ForwardMesh:
         node_idxs = np.zeros((len(num_nodes), m), dtype=np.int)
         mask = np.zeros((len(num_nodes), m), dtype=np.int)
 
+        # indices to fill to avoid bad overwriting when mask = 0.
+        dummy_fill = []
+        for t, b in zip(_top, _bottom):
+            dummy_fill.append(np.delete(np.arange(n), np.hstack((t, b))))
+
         for i, t in enumerate(_top):
             top[i, :len(t)] = t
+            if dummy_fill[i].size:
+                top[i, len(t):] = dummy_fill[i][0]
         for i, t in enumerate(_bottom):
             bottom[i, :len(t)] = t
+            if dummy_fill[i].size:
+                bottom[i, len(t):] = dummy_fill[i][0]
         for i, t in enumerate(_node_idxs):
             node_idxs[i, :len(t)] = t
         for i, t in enumerate(_node_idxs):
@@ -350,8 +366,8 @@ class ForwardMesh:
         def matrix(params=self.params, inputs=jnp.eye(self.n, dtype=np.complex64),
                    bs_errors=jnp.array(self.all_errors), loss_errors=jnp.array(self.all_losses)):
             forward = forward_matrix_fn(params, inputs, bs_errors, loss_errors)
-            forward_inputs_abs = jnp.abs(jnp.abs(forward) + io_amp_error_std * np.random.randn(*forward.shape))
-            forward_inputs_phase = jnp.angle(forward) + io_phase_error_std * np.random.randn(*forward.shape)
+            forward_inputs_abs = jnp.abs(jnp.abs(forward) * (1 + io_amp_error_std * np.random.randn(*forward.shape)))
+            forward_inputs_phase = jnp.angle(forward) + io_phase_error_std * np.random.randn(*forward.shape) * np.pi
             forward = forward_inputs_abs * jnp.exp(1j * forward_inputs_phase)
             return forward
 
@@ -361,13 +377,20 @@ class ForwardMesh:
 
         def matrix_bwd(res, g):
             params, inputs, bs_errors, loss_errors = res
+
+            inorm = jnp.max(jnp.linalg.norm(inputs, axis=-1))
+            gnorm = jnp.max(jnp.linalg.norm(g, axis=-1))
+
+            inputs /= inorm
+            g /= gnorm
+
             forward = forward_prop_fn(params, inputs, bs_errors, loss_errors)
 
             if all_analog:
                 # instead of using digital subtraction of backpropagating signals, use only forward prop'd signal
                 adjoint_inputs = backward_matrix_fn(params, g, bs_errors, loss_errors).squeeze()
-                adjoint_inputs_abs = jnp.abs(jnp.abs(adjoint_inputs) + io_amp_error_std * np.random.randn(*adjoint_inputs.shape))
-                adjoint_inputs_phase = jnp.angle(adjoint_inputs) + io_phase_error_std * np.random.randn(*adjoint_inputs.shape)
+                adjoint_inputs_abs = jnp.abs(jnp.abs(adjoint_inputs) * (1 + io_amp_error_std * np.random.randn(*adjoint_inputs.shape)))
+                adjoint_inputs_phase = jnp.angle(adjoint_inputs) + io_phase_error_std * np.random.randn(*adjoint_inputs.shape) * np.pi
                 adjoint_inputs = adjoint_inputs_abs * jnp.exp(1j * adjoint_inputs_phase)
                 adjoint = forward_prop_fn(params, jnp.conj(adjoint_inputs), bs_errors, loss_errors)
             else:
@@ -375,11 +398,16 @@ class ForwardMesh:
                 adjoint_inputs = adjoint[0]
             sum = forward_prop_fn(params, inputs - 1j * jnp.conj(adjoint_inputs), bs_errors, loss_errors)
 
-            # gradient powers (subtracting sum signal by forward and adjoint), sqrt(3) since variances add.
-            grad_powers = jnp.abs(sum) ** 2 - jnp.abs(forward) ** 2 - jnp.abs(adjoint) ** 2 + np.sqrt(3) * tap_pd_shot_noise * np.random.randn(*forward.shape)
+            sum_abs, forward_abs, adjoint_abs = jnp.abs(sum), jnp.abs(forward), jnp.abs(adjoint)
+
+            # gradient powers (note that in all-analog update, tap photodetector noise has no effect on learning!)
+            sum_meas = sum_abs ** 2 + tap_pd_shot_noise * sum_abs * np.random.randn(*forward.shape)
+            forward_meas = forward_abs ** 2 + tap_pd_shot_noise * forward_abs * np.random.randn(*forward.shape)
+            adjoint_meas = adjoint_abs ** 2 + tap_pd_shot_noise * adjoint_abs * np.random.randn(*forward.shape)
+            grad_powers = sum_meas - forward_meas - adjoint_meas 
 
             # returns the grad powers at the various gradient positions and adjoint inputs (needed to propagate errors backward to prev layer)
-            return (self.phase_shift_localize(grad_powers / 2), adjoint_inputs, jnp.zeros_like(bs_errors), jnp.zeros_like(loss_errors))
+            return (self.phase_shift_localize(grad_powers / 2 * (inorm * gnorm)), adjoint_inputs, jnp.zeros_like(bs_errors), jnp.zeros_like(loss_errors))
 
         matrix.defvjp(matrix_fwd, matrix_bwd)
         return matrix
@@ -463,11 +491,10 @@ class ForwardMesh:
         elif self.phase_style == PhaseStyle.BOTTOM:
             theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
             phi = np.angle(top[:, -1]) - np.angle(bottom[:, -1]) + np.pi
-            phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
         else:
             theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
             phi = np.angle(bottom[:, -1]) - np.angle(top[:, -1])
-            phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
+        phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
         return theta, phi
 
     @property
@@ -723,8 +750,8 @@ def _parallel_transform(v: np.ndarray, matrix_elements: np.ndarray, idx: np.ndar
     s21, s22 = t21[node_idxs][:, np.newaxis], t22[node_idxs][:, np.newaxis]
     if use_jax:
         mask = mask[:, np.newaxis]
-        s11 = s11 * mask + (1 - mask)
-        s22 = s22 * mask + (1 - mask)
+        s11 = s11 * mask + (1 + 0j - mask)
+        s22 = s22 * mask + (1 + 0j - mask)
         s12 = s12 * mask
         s21 = s21 * mask
         return v.at[jnp.hstack((top, bottom))].set(
@@ -753,6 +780,8 @@ def _parallel_multiply(v: np.ndarray, phases: np.ndarray, idx: np.ndarray, phase
 
 def _parallel_propagate(inputs: np.ndarray, thetas: np.ndarray, phis: np.ndarray, left: np.ndarray, right: np.ndarray,
                         idx: np.ndarray, phase_style: PhaseStyle, back: bool = False, use_jax: bool = True):
+    """Propagate through a layer of MZIs
+    """
     propagated = []
     if back:
         v1 = _parallel_transform(inputs, right, idx, use_jax=use_jax)
@@ -778,7 +807,7 @@ class InSituBackpropLayer(hk.Module):
     def __init__(self, mesh: ForwardMesh, in_situ_matrix: callable = None,
                  activation: callable = None, name: str=None,
                  tap_pd_shot_noise: float = 0, io_amp_error_std: float = 0,
-                 io_phase_error_std: float = 0, all_analog: bool = True,
+                 io_phase_error_std: float = 0, loss_db_std: float = 0, all_analog: bool = True,
                  set_gammas_zero: bool = True, use_jit: bool = True):
         """Mesh layer for backpropagation.
 
@@ -790,6 +819,7 @@ class InSituBackpropLayer(hk.Module):
             tap_pd_shot_noise: Tap photodetector shot noise (should be proportional to power)
             io_amp_error_std: Amplitude error (random, based on measurement)
             io_phase_error_std: Phase error (random, based on measurement)
+            loss_db_std: Loss error variation among the components in the mesh
             all_analog: All-analog measurement
             use_jit: JIT compile (should be slow on the first step and fast after that.)
         
@@ -799,6 +829,7 @@ class InSituBackpropLayer(hk.Module):
         self.output_size = self.n = mesh.n
         if set_gammas_zero:
             self.mesh.gammas = np.zeros_like(self.mesh.gammas) # useful hack for this demo
+        self.mesh = self.mesh.add_error_variance(0, loss_db_std)
         
         if in_situ_matrix is None:
             self.matrix = self.mesh.in_situ_matrix_fn(tap_pd_shot_noise, io_amp_error_std, io_phase_error_std, all_analog)

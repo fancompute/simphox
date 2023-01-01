@@ -127,8 +127,8 @@ def _program_vector_unit(v: np.ndarray, network: ForwardMesh):
     w = w[:, np.newaxis] if w.ndim == 1 else w
     for nc in network.columns:
         # grab the elements for the top and bottom arms of the mzi.
-        top = w[(nc.top,)]
-        bottom = w[(nc.bottom,)]
+        top = w[nc.top]
+        bottom = w[nc.bottom]
 
         theta, phi = nc.parallel_nullify(w, network.mzi_terms)
 
@@ -137,25 +137,26 @@ def _program_vector_unit(v: np.ndarray, network: ForwardMesh):
         t11, t12, t21, t22 = t11[:, np.newaxis], t12[:, np.newaxis], t21[:, np.newaxis], t22[:, np.newaxis]
 
         # these are the top port powers before nulling
-        network.pnsn[(nc.node_idxs,)] = np.abs(top[..., -1]
-                                               if network.phase_style == PhaseStyle.TOP else bottom[..., -1]) ** 2
+        network.pnsn[nc.node_idxs] = np.abs(top[..., -1]
+                                            if network.phase_style == PhaseStyle.TOP else bottom[..., -1]) ** 2
 
         # The final vector after the vectorized multiply
-        w[(nc.top + nc.bottom,)] = np.vstack([t11 * top + t21 * bottom,
-                                              t12 * top + t22 * bottom])
+        w[nc.top + nc.bottom] = np.vstack([t11 * top + t21 * bottom,
+                                           t12 * top + t22 * bottom])
 
         # these are the relative powers after nulling
-        network.pn[(nc.node_idxs,)] = np.abs(w[(nc.bottom,)][..., -1]) ** 2
+        network.pn[nc.node_idxs] = np.abs(w[nc.bottom][..., -1]) ** 2
 
         # The resulting thetas and phis, indexed according to the coupling network specifications
-        thetas[(nc.node_idxs,)] = theta
-        phis[(nc.node_idxs,)] = np.mod(phi, 2 * np.pi)
+        thetas[nc.node_idxs] = theta
+        phis[nc.node_idxs] = np.mod(phi, 2 * np.pi)
 
     final_basis_vec = np.zeros(v.shape[0])
     final_basis_vec[-1] = 1
     gammas = -np.angle(final_basis_vec * w[-1, -1])
 
     network.params = thetas, phis, gammas
+    # print(network.params)
 
     return network, w.squeeze()
 
