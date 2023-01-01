@@ -21,7 +21,7 @@ jobs:
           python-version: 3.9
       - name: Install dependencies
         run: |
-          pip install -r requirements_dev.txt
+          pip install -r requirements.txt
           pip install .
           pip install -r doc/source/requirements.txt
           sudo apt install pandoc
