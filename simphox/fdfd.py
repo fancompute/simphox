@@ -1,18 +1,17 @@
-import jax
 import jax.numpy as jnp
 import numpy as np
 import scipy.sparse as sp
 from jax.config import config
 from jax.scipy.sparse.linalg import bicgstab
-from scipy.sparse.linalg import eigs
 
-from .primitives import spsolve, TMOperator
+from .primitives import TMOperator
 from .sim import SimGrid
 from .typing import Callable, Dict, List, Optional, Shape2, Size, Size2, Size3, Spacing, SpSolve, Tuple, Union
 from .utils import curl_fn, d2curl_op, yee_avg_2d_z, yee_avg_jax
 
 try:  # pardiso (using Intel MKL) is much faster than scipy's solver
-    from .mkl import spsolve_pardiso, feast_eigs
+    from .mkl import spsolve_pardiso
+    from .primitives import spsolve
 except OSError:  # if mkl isn't installed
     from scipy.sparse.linalg import spsolve
 
@@ -70,6 +69,7 @@ class FDFD(SimGrid):
         pml_sep: The PML separation distance in number of pixels for sources
         pml_params: The PML parameters of the form :code:`(exp_scale, log_reflectivity, pml_eps)`.
     """
+
     def __init__(self, size: Size, spacing: Spacing,
                  wavelength: float = 1.55, eps: Union[float, np.ndarray] = 1,
                  bloch_phase: Union[Size, float] = 0.0, pml: Optional[Union[Size, float]] = None,
@@ -344,7 +344,6 @@ class FDFD(SimGrid):
             return jnp.array(mat.data, dtype=np.complex128), jnp.vstack((jnp.array(mat.row), jnp.array(mat.col)))
 
         if self.ndim < 3:
-            shape = self.shape
             o = jnp.zeros(self.shape3, jnp.complex128)
             if tm_2d:
                 # exact 2d FDFD for TM polarization

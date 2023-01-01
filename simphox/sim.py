@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from .grid import YeeGrid
 from .mode import ModeSolver, ModeLibrary
 from .parse import parse_excitation
-from .typing import Excitation, Spacing, Shape, Union, Size, Optional, List, Tuple, Shape2, Size2, Dict, Size3, \
+from .typing import Excitation, Spacing, Shape, Union, Size, Optional, List, Tuple, Size2, Dict, Size3, \
     Callable, \
     MeasureInfo, Op, PortLabel
 from .utils import fix_dataclass_init_docs
@@ -17,17 +17,10 @@ try:
     HOLOVIEWS_IMPORTED = True
     import holoviews as hv
     from holoviews.streams import Pipe
-    from holoviews import opts
     import panel as pn
 except ImportError:
     HOLOVIEWS_IMPORTED = False
 
-try:
-    from dphox.pattern import Pattern
-
-    DPHOX_INSTALLED = True
-except ImportError:
-    DPHOX_INSTALLED = False
 
 import dataclasses
 import xarray as xr
@@ -351,7 +344,9 @@ class SimGrid(YeeGrid):
             eps_slice = [slice(None), slice(None), slice(None)]
             eps_slice[xs_axis] = 0
             eps_norm = np.ones_like(self.eps[tuple(eps_slice)].T)
-        bounded_img = lambda data: hv.Image(data, bounds=bounds)
+
+        def bounded_img(data):
+            return hv.Image(data, bounds=bounds)
         eps_pipe = Pipe(data=[])
         eps_dmap = hv.DynamicMap(bounded_img, streams=[eps_pipe])
         field_pipe = Pipe(data=[])
@@ -496,7 +491,7 @@ class SimGrid(YeeGrid):
                 sparams, fields = sparams_fields
                 insertion_sqrt = jnp.linalg.norm(sparams)
                 cost = -jnp.abs(s @ (sparams / insertion_sqrt)) ** 2 * (
-                        1 - insertion_weight) - insertion_sqrt ** 2 * insertion_weight
+                    1 - insertion_weight) - insertion_sqrt ** 2 * insertion_weight
                 return cost, jax.lax.stop_gradient((sparams, fields))
         else:
             def obj(sparams_fields: Tuple[jnp.ndarray, jnp.ndarray]):

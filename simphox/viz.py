@@ -100,7 +100,7 @@ def plot_eps_2d(ax, eps: np.ndarray, spacing: Optional[float] = None, cmap: str 
 
 
 def plot_field_2d(ax, field: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Optional[float] = None,
-                  cmap: str = 'RdBu', mat_cmap: str = 'gray', alpha: float = 0.8, vmax = None):
+                  cmap: str = 'RdBu', mat_cmap: str = 'gray', alpha: float = 0.8, vmax=None):
     """Plot field in 2D
 
     Args:
@@ -126,7 +126,7 @@ def plot_field_2d(ax, field: np.ndarray, eps: Optional[np.ndarray] = None, spaci
 
 
 def plot_eps_1d(ax, eps: Optional[np.ndarray], spacing: Optional[float] = None,
-                color: str = 'blue', units: str = "$\mu$m", axis_label_rotation: float = 90):
+                color: str = 'blue', units: str = r"$\mu$m", axis_label_rotation: float = 90):
     """Plot eps in 1D.
 
     Args:
@@ -141,7 +141,7 @@ def plot_eps_1d(ax, eps: Optional[np.ndarray], spacing: Optional[float] = None,
     x = np.arange(eps.shape[0]) * spacing
     if spacing:
         ax.set_xlabel(rf'$x$ ({units})')
-        ax.set_ylabel(rf'Relative permittivity ($\epsilon$)', color=color,
+        ax.set_ylabel(r'Relative permittivity ($\epsilon$)', color=color,
                       rotation=axis_label_rotation, labelpad=15)
     ax.plot(x, eps, color=color)
     ax.tick_params(axis='y', labelcolor=color)
@@ -149,7 +149,7 @@ def plot_eps_1d(ax, eps: Optional[np.ndarray], spacing: Optional[float] = None,
 
 def plot_field_1d(ax, field: np.ndarray, field_name: str, eps: Optional[np.ndarray] = None,
                   spacing: Optional[float] = None, color: str = 'red', eps_color: str = 'blue',
-                  units: str = "$\mu$m"):
+                  units: str = r"$\mu$m"):
     """Plot field in 1D
 
     Args:
@@ -218,7 +218,7 @@ def hv_power_2d(power: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Op
 
 
 def plot_power_2d(ax, power: np.ndarray, eps: Optional[np.ndarray] = None, spacing: Optional[float] = None,
-                  cmap: str = 'hot', mat_cmap: str = 'gray', alpha: float = 0.8, vmax = None):
+                  cmap: str = 'hot', mat_cmap: str = 'gray', alpha: float = 0.8, vmax=None):
     """Plot the power (computed using Poynting) in 2D
 
     Args:

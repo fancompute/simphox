@@ -1,3 +1,9 @@
+import copy
+from simphox.utils import random_vector
+from simphox.circuit.vector import tree, hessian_fd, hessian_vector_unit, PhaseStyle
+from simphox.circuit import cascade, vector_unit, rectangular, balanced_tree
+from scipy.stats import unitary_group
+import pytest
 from itertools import product, zip_longest
 
 import numpy as np
@@ -6,15 +12,6 @@ import jax.numpy as jnp
 from jax import grad
 jax.config.update('jax_platform_name', 'cpu')
 jax.config.update("jax_enable_x64", True)
-
-import pytest
-from scipy.stats import unitary_group
-
-from simphox.circuit import cascade, vector_unit, rectangular, balanced_tree
-from simphox.circuit.vector import _program_vector_unit, tree, hessian_fd, hessian_vector_unit, PhaseStyle
-from simphox.utils import random_vector
-
-import copy
 
 
 N = [2, 4, 7, 10, 15, 16]
@@ -149,9 +146,15 @@ def test_in_situ_matrix_fn(u: np.ndarray, input_type: str, all_analog: bool):
     inputs = jnp.ones(u.shape[0], dtype=jnp.complex64) if input_type == 'ones' else jnp.eye(u.shape[0], dtype=jnp.complex64)
     in_situ_matrix_fn = mesh.in_situ_matrix_fn(all_analog=all_analog)
     matrix_fn = mesh.matrix_fn(use_jax=True)
-    tr = lambda u: jnp.abs(u[0, 0]) ** 2
-    fn = lambda params: tr(matrix_fn(params, inputs))
-    in_situ_fn = lambda params: tr(in_situ_matrix_fn(params, inputs))
+
+    def tr(u):
+        return jnp.abs(u[0, 0]) ** 2
+
+    def fn(params):
+        return tr(matrix_fn(params, inputs))
+
+    def in_situ_fn(params):
+        return tr(in_situ_matrix_fn(params, inputs))
     grad_fn = grad(fn)
     grad_in_situ_fn = grad(in_situ_fn)
     for expected, actual in zip(grad_in_situ_fn(mesh.params), grad_fn(mesh.params)):

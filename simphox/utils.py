@@ -179,6 +179,7 @@ def curl_fn(df: Callable[[np.ndarray, int], np.ndarray], use_jax: bool = False, 
 
 def curl_pml_fn(df: Callable[[np.ndarray, int], np.ndarray], use_jax: bool = False):
     xp = jnp if use_jax else np
+
     def _curl(f: np.ndarray, prev_df: np.ndarray, b_pml: np.ndarray):
         next_df = xp.stack(
             [df(f[2], 1), df(f[1], 2),
@@ -363,7 +364,7 @@ def gaussian_fn(wavelength: float, pulse_width: float = 0, fwidth: float = np.in
     return _gaussian
 
 
-def shift_slice(slice_to_shift: Tuple[Union[slice, int], ...], shift: int = 1, axis = 0):
+def shift_slice(slice_to_shift: Tuple[Union[slice, int], ...], shift: int = 1, axis=0):
     """Shift slice tuple by some amount.
 
     Args:

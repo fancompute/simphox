@@ -7,7 +7,7 @@ from .typing import Optional, Callable, Union, List, Tuple, Dict
 import jax
 import jax.numpy as jnp
 from jax.config import config
-from jax.experimental.optimizers import adam
+from jax.example_libraries.optimizers import adam
 import numpy as np
 import dataclasses
 import xarray
@@ -232,7 +232,7 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
     all_metric_names = sum([metric_names for _, metric_names in viz.metric_config.items()], [])
     metrics = xarray.DataArray(
         data=np.array([[history[f'{metric_name}/{sop.sim.name}']
-                          for metric_name in all_metric_names] for sop in sim_opt_problems]),
+                        for metric_name in all_metric_names] for sop in sim_opt_problems]),
         coords={
             'name': [sop.sim.name for sop in sim_opt_problems],
             'metric': all_metric_names,
@@ -243,7 +243,7 @@ def opt_run(opt_problem: Union[OptProblem, List[OptProblem]], init_params: np.nd
     ) if sim_opt_problems and metric_interval != 0 else []
     eps = xarray.DataArray(
         data=np.array([[eps for _, eps in history[f'eps/{sop.sim.name}']] if eps_interval > 0 else []
-                         for sop in sim_opt_problems]),
+                       for sop in sim_opt_problems]),
         coords={
             'name': [sop.sim.name for sop in sim_opt_problems],
             'iteration': [it for it, _ in history[f'eps/{sim_opt_problems[0].sim.name}']],

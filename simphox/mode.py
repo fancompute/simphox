@@ -14,12 +14,6 @@ except OSError:  # if mkl isn't installed
     pass
 
 try:
-    from dphox.component import Pattern
-    DPHOX_INSTALLED = True
-except ImportError:
-    DPHOX_INSTALLED = False
-
-try:
     import holoviews as hv
     HOLOVIEWS_INSTALLED = True
 except ImportError:
@@ -322,7 +316,7 @@ class ModeLibrary:
             else:
                 mode = np.hstack((1j * self.betas[mode_idx] * mode, self.o,
                                   -(mode - np.roll(mode, 1, axis=0)) / self.solver.cells[0])) / (
-                               1j * self.solver.k0)
+                    1j * self.solver.k0)
         return self.solver.reshape(mode)
 
     def e(self, mode_idx: int = 0, tm_2d: bool = True) -> np.ndarray:
@@ -344,7 +338,7 @@ class ModeLibrary:
             if tm_2d:
                 mode = np.hstack((1j * self.betas[mode_idx] * mode, self.o,
                                   -(np.roll(mode, -1, axis=0) - mode) / self.solver.cells[0])) / (
-                               1j * self.solver.k0 * self.solver.eps_t.flatten())
+                    1j * self.solver.k0 * self.solver.eps_t.flatten())
             else:
                 mode = np.hstack((self.o, mode, self.o))
             return self.solver.reshape(mode)
@@ -429,12 +423,12 @@ class ModeLibrary:
             ax.set_title(rf'{title}', fontsize=title_size)
         if self.ndim == 2:
             plot_power_2d(ax, np.abs(self.sz(idx).real), self.eps, spacing=self.solver.spacing[0])
-            ax.text(x=0.9, y=0.9, s=rf'$s_z$', color='white', transform=ax.transAxes, fontsize=label_size)
+            ax.text(x=0.9, y=0.9, s=r'$s_z$', color='white', transform=ax.transAxes, fontsize=label_size)
             ratio = np.max((self.te_ratio(idx), 1 - self.te_ratio(idx)))
             polarization = "TE" if np.argmax((self.te_ratio(idx), 1 - self.te_ratio(idx))) > 0 else "TM"
             ax.text(x=0.05, y=0.9, s=rf'{polarization}[{ratio:.2f}]', color='white', transform=ax.transAxes)
         else:
-            plot_field_1d(ax, np.abs(self.sz(idx).real), rf'Power',
+            plot_field_1d(ax, np.abs(self.sz(idx).real), 'Power',
                           self.eps, spacing=self.solver.spacing[0])
 
     def _get_field_component(self, idx: int = 0, axis: Union[int, str] = 1, use_h: bool = True):
@@ -604,5 +598,3 @@ class ModeLibrary:
         return hv.DynamicMap(_evolve, kdims=['length']).redim.values(
             length=np.linspace(0, max_length, int(max_length / self.solver.spacing[0]) + 1)
         )
-
-

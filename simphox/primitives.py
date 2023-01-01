@@ -58,6 +58,7 @@ class TMOperator:
         df: A list of forward discrete derivative in order (:code:`df_x`, :code:`df_y`, :code:`df_z`).
         db: A list of backward discrete derivative in order (:code:`db_x`, :code:`db_y`, :code:`db_z`).
     """
+
     def __init__(self, df: List[sp.spmatrix], db: List[sp.spmatrix]):
         self.df, self.db = df, db
         data_x, self.x_indices = _coo_to_jnp(self.df[0] @ self.db[0])

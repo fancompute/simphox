@@ -67,7 +67,7 @@ def test_spacing(size: Shape, spacing: Size,
     ],
 )
 def test_error_raised_for_shape_eps_mismatch(shape: Shape, eps: Union[float, np.ndarray]):
-    with pytest.raises(AttributeError, match=f'Require grid.shape == eps.shape but got '):
+    with pytest.raises(AttributeError, match='Require grid.shape == eps.shape but got '):
         Grid(shape, 1, eps)
 
 
@@ -125,7 +125,7 @@ def test_spacing3(sim_spacing3: Size, spacing: Size, size: Size):
         ((2.5, 2.5, 1), 0.5, (1, 1, 1), (0.5, 1, 1), True, [slice(2, 3, None), slice(1, 3, None), slice(1, 3, None)]),
         ((2.5, 2.5, 1), 0.5, (1, 1, 1), (0.5, 0.1, 1), True, [slice(2, 3, None), 2, slice(1, 3, None)]),
         (
-        (2.5, 2.5, 1), 0.5, (1, 1, 1), (0.5, 0.1, 1), False, [slice(2, 3, None), slice(2, 3, None), slice(1, 3, None)]),
+            (2.5, 2.5, 1), 0.5, (1, 1, 1), (0.5, 0.1, 1), False, [slice(2, 3, None), slice(2, 3, None), slice(1, 3, None)]),
         ((1, 1), 0.2, (1, 1, 0), (0.5, 1, 1), True, [slice(4, 6, None), slice(3, 8, None), 0]),
     ],
 )
@@ -211,24 +211,24 @@ def test_db(size: Size, spacing: Size, pml: Optional[Size3], expected_db_data: n
         )),
         (Box((0.2, 0.4), material=TEST_ZERO), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, False,
          Box((0.2, 0.2), material=TEST_ZERO), 0.2, (0.2, 0.2), np.array([
-            [1, 1, 0, 1, 1],
-            [1, 1, 1, 1, 1],
-            [1, 0, 0, 1, 1],
-            [1, 1, 1, 1, 1],
-            [1, 0, 0, 1, 1],
-            [1, 1, 1, 1, 1],
-            [1, 1, 0, 1, 1]
-        ])),
+             [1, 1, 0, 1, 1],
+             [1, 1, 1, 1, 1],
+             [1, 0, 0, 1, 1],
+             [1, 1, 1, 1, 1],
+             [1, 0, 0, 1, 1],
+             [1, 1, 1, 1, 1],
+             [1, 1, 0, 1, 1]
+         ])),
         (Box((0.2, 0.4), material=TEST_ZERO), (1.4, 0.2), (1.4, 1), 0.2, 0.2, 0, True,
          Box((0.2, 0.2), material=TEST_ZERO), 0.2, (0.2, 0.2), np.array([
-            [1., 1., 1., 1., 1.],
-            [1., 1., 1., 1., 1.],
-            [1., 0., 0., 1., 0.],
-            [1., 1., 1., 1., 1.],
-            [1., 0., 0., 1., 0.],
-            [1., 1., 1., 1., 1.],
-            [1., 1., 1., 1., 1.]
-        ])),
+             [1., 1., 1., 1., 1.],
+             [1., 1., 1., 1., 1.],
+             [1., 0., 0., 1., 0.],
+             [1., 1., 1., 1., 1.],
+             [1., 0., 0., 1., 0.],
+             [1., 1., 1., 1., 1.],
+             [1., 1., 1., 1., 1.]
+         ])),
         (Box((0.6, 0.6), material=TEST_ZERO), (1, 1), (1, 1), 0.2, 0.2, 0, False, None, 0, 0, np.array([
             [1, 1, 1, 1, 1],
             [1, 0, 0, 0, 1],
@@ -252,20 +252,20 @@ def test_db(size: Size, spacing: Size, pml: Optional[Size3], expected_db_data: n
         ])),
         (Box((0.2, 0.4), material=TEST_ZERO), (1, 0.2), (1, 1), 0.2, 0.2, 0, False,
          Box((0.2, 0.4), material=TEST_ZERO), 0, 0.2, np.array([
-            [1, 0, 0, 1, 1],
-            [1, 1, 1, 1, 1],
-            [1, 0, 0, 1, 1],
-            [1, 1, 1, 1, 1],
-            [1, 0, 0, 1, 1]
-        ])),
+             [1, 0, 0, 1, 1],
+             [1, 1, 1, 1, 1],
+             [1, 0, 0, 1, 1],
+             [1, 1, 1, 1, 1],
+             [1, 0, 0, 1, 1]
+         ])),
         (Box((0.4, 0.2), material=TEST_ZERO), (1, 0.2), (1, 1), 0.2, 0.2, 0, True,
          Box((0.4, 0.2), material=TEST_ZERO), 0, 0.2, np.array([
-            [1., 1., 1., 1., 1.],
-            [1., 1., 0., 1., 0.],
-            [1., 1., 0., 1., 0.],
-            [1., 1., 1., 1., 1.],
-            [1., 1., 1., 1., 1.]
-        ])),
+             [1., 1., 1., 1., 1.],
+             [1., 1., 0., 1., 0.],
+             [1., 1., 0., 1., 0.],
+             [1., 1., 1., 1., 1.],
+             [1., 1., 1., 1., 1.]
+         ])),
     ],
 )
 def test_block_design_eps_matches_expected(waveguide: Box, sub: Size2, size: Size2, wg_height: float, spacing: float,

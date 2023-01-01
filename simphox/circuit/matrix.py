@@ -2,12 +2,6 @@ from typing import Tuple
 
 import scipy as sp
 
-try:
-    DPHOX_IMPORTED = True
-    from dphox.device import Device
-    from dphox.pattern import Pattern
-except ImportError:
-    DPHOX_IMPORTED = False
 
 from .coupling import PhaseStyle
 from .rectangular import rectangular
@@ -180,15 +174,15 @@ def csinv(l0: np.ndarray, l1: np.ndarray, r0: np.ndarray, r1: np.ndarray, theta:
         The final unitary matrix :code:`u`.
 
     """
-    l = block_diag(l0, l1)
-    r = block_diag(r0, r1)
+    left = block_diag(l0, l1)
+    right = block_diag(r0, r1)
     c = np.cos(theta)
     s = np.sin(theta)
     d = np.block([[np.diag(s), np.diag(c)],
                   [np.diag(c), -np.diag(s)]])
     if r0.shape[0] != r1.shape[1]:
         d = block_diag(d, 1).astype(np.complex128)
-    return l @ d @ r
+    return left @ d @ right
 
 
 def _bowtie(u: np.ndarray, n_rails: int, thetas: np.ndarray, phis: np.ndarray, start: int, layer: int = None):

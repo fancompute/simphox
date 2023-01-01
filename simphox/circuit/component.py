@@ -8,13 +8,6 @@ try:
 except ImportError:
     DPHOX_IMPORTED = False
 
-try:
-    DPHOX_IMPORTED = True
-    from dphox.device import Device
-    from dphox.pattern import Pattern
-except ImportError:
-    DPHOX_IMPORTED = False
-
 from ..fdfd import FDFD
 from ..typing import Callable, Iterable, List, Optional, Size, Union
 
@@ -107,4 +100,3 @@ class Component:
         )
 
         return cls(pattern, model=model, name=name)
-

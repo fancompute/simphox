@@ -4,10 +4,10 @@ from typing import Tuple, List, Callable
 import jax.numpy as jnp
 import numpy as np
 
-from .parse import parse_excitation, parse_source_port
+from .parse import parse_source_port
 from .sim import SimGrid
-from .typing import Array, Op, Shape, Spacing, Optional, Union, State, Size3, Size, Source
-from .utils import pml_sigma, curl_pml_fn, yee_avg, yee_avg_jax, shift_slice
+from .typing import Array, Shape, Spacing, Optional, Union, State, Size3, Size, Source
+from .utils import pml_sigma, curl_pml_fn, yee_avg, yee_avg_jax
 
 try:
     from dphox.pattern import Pattern
@@ -334,13 +334,17 @@ class FDTD(SimGrid):
     def curl_e_pml(self, pml_idx: int) -> Callable[[Array, Array, Array], Array]:
         dx, _ = self._dxes
         c, s = self.cpml_c[pml_idx][0], self.pml_regions[pml_idx][1:]
-        de = lambda e, ax: c[ax] * (self.xp.roll(e, -1, axis=ax)[s] - e[s]) / dx[ax][s]
+
+        def de(e, ax):
+            return c[ax] * (self.xp.roll(e, -1, axis=ax)[s] - e[s]) / dx[ax][s]
         return curl_pml_fn(de, use_jax=self.use_jax)
 
     def curl_h_pml(self, pml_idx: int) -> Callable[[Array, Array, Array], Array]:
         _, dx = self._dxes
         c, s = self.cpml_c[pml_idx][1], self.pml_regions[pml_idx][1:]
-        dh = lambda h, ax: c[ax] * (h[s] - self.xp.roll(h, 1, axis=ax)[s]) / dx[ax][s]
+
+        def dh(h, ax):
+            return c[ax] * (h[s] - self.xp.roll(h, 1, axis=ax)[s]) / dx[ax][s]
         return curl_pml_fn(dh, use_jax=self.use_jax)
 
     @property

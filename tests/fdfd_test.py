@@ -1,3 +1,4 @@
+from jax.config import config
 import numpy as np
 import pytest
 
@@ -6,7 +7,6 @@ from simphox.typing import Size, Size3, Optional, List, Union
 
 np.random.seed(0)
 
-from jax.config import config
 
 config.update("jax_enable_x64", True)
 # config.update('jax_platform_name', 'cpu')

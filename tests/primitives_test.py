@@ -51,7 +51,7 @@ def test_spsolve_vjp_b(mat: sp.spmatrix, v: np.ndarray, g: np.ndarray, expected:
     [
         (sp.spdiags(np.array([[1, 2, 3, 4, 5], [6, 5, 8, 9, 10]]), [0, 1], 5, 5),
          np.ones(5, dtype=np.complex128), np.ones(5, dtype=np.complex128),
-         np.array([[-726, -276, -221, -112.5, -181.44,  138,   78,   51, 90]], dtype=np.complex128) / 36),
+         np.array([[-726, -276, -221, -112.5, -181.44, 138, 78, 51, 90]], dtype=np.complex128) / 36),
     ],
 )
 def test_spsolve_vjp_mat(mat: sp.spmatrix, v: np.ndarray, g: np.ndarray, expected: np.ndarray):
@@ -77,7 +77,9 @@ def test_spsolve_vjp_mat(mat: sp.spmatrix, v: np.ndarray, g: np.ndarray, expecte
 def test_tmoperator_numerical_grads(mat1: sp.spmatrix, mat2: sp.spmatrix, v: np.ndarray):
     operator = TMOperator([mat1, mat2], [mat2, mat1])
     op = operator.compile_operator_along_axis(axis=0)
-    f = lambda x: jnp.sum(op(x)).real
+
+    def f(x):
+        return jnp.sum(op(x)).real
     jtu.check_grads(f, (v,), order=1, modes=['rev'])
 
 
@@ -93,5 +95,7 @@ def test_spsolve_numerical_grads(mat, v):
     mat = mat.tocoo()
     mat_entries = jnp.array(mat.data, dtype=np.complex128)
     mat_indices = jnp.vstack((jnp.array(mat.row), jnp.array(mat.col)))
-    f = lambda x: jnp.sum(spsolve(x, jnp.asarray(v), mat_indices).real)
+
+    def f(x):
+        return jnp.sum(spsolve(x, jnp.asarray(v), mat_indices).real)
     jtu.check_grads(f, (mat_entries,), order=1, modes=['rev'])

@@ -1,6 +1,5 @@
 import copy
 from collections import defaultdict
-from enum import Enum
 from typing import Tuple, Optional
 from jax import custom_vjp
 
@@ -265,7 +264,7 @@ class ForwardMesh:
             node_idxs[i, :len(t)] = t
         for i, t in enumerate(_node_idxs):
             mask[i, :len(t)] = 1
-        
+
         return top, bottom, node_idxs, mask
 
     def propagate_matrix_fn(self, back: bool = False, column_cutoff: Optional[int] = None,
@@ -336,7 +335,7 @@ class ForwardMesh:
             if not back and column_cutoff == self.num_columns:
                 outputs = (xp.exp(1j * gammas) * outputs.T).T
                 propagated.append(outputs.copy()[None])
-            
+
             return xp.vstack(propagated).squeeze() if explicit else xp.vstack(propagated)
         return propagate_matrix
 
@@ -344,9 +343,8 @@ class ForwardMesh:
                            back: bool = False, use_jax: bool = True):
         return _parallel_propagate(outputs, thetas, phis, left, right,
                                    (self.top, self.bottom, self.node_idxs, None), self.phase_style, back, use_jax)
-    
 
-    def in_situ_matrix_fn(self, tap_pd_shot_noise: float = 0, io_amp_error_std: float = 0, io_phase_error_std: float = 0, 
+    def in_situ_matrix_fn(self, tap_pd_shot_noise: float = 0, io_amp_error_std: float = 0, io_phase_error_std: float = 0,
                           all_analog: bool = True):
         """A version of matrix function with in situ backpropagation registered as the "optical VJP."
 
@@ -404,7 +402,7 @@ class ForwardMesh:
             sum_meas = sum_abs ** 2 + tap_pd_shot_noise * sum_abs * np.random.randn(*forward.shape)
             forward_meas = forward_abs ** 2 + tap_pd_shot_noise * forward_abs * np.random.randn(*forward.shape)
             adjoint_meas = adjoint_abs ** 2 + tap_pd_shot_noise * adjoint_abs * np.random.randn(*forward.shape)
-            grad_powers = sum_meas - forward_meas - adjoint_meas 
+            grad_powers = sum_meas - forward_meas - adjoint_meas
 
             # returns the grad powers at the various gradient positions and adjoint inputs (needed to propagate errors backward to prev layer)
             return (self.phase_shift_localize(grad_powers / 2 * (inorm * gnorm)), adjoint_inputs, jnp.zeros_like(bs_errors), jnp.zeros_like(loss_errors))
@@ -519,7 +517,7 @@ class ForwardMesh:
         errors = error if constant else error * np.random.randn(self.thetas.size)
         g_errors = error if constant else error * np.random.randn(self.gammas.size)
         return self.thetas + errors, self.phis + errors, self.gammas + g_errors * gamma_error
-    
+
     def phase_shift_localize(self, prop_powers: np.ndarray, use_jax: bool = True):
         xp = jnp if use_jax else np
         if prop_powers.ndim == 3:
@@ -534,13 +532,12 @@ class ForwardMesh:
                 xp.hstack([prop_powers[i * 4, nc.top] for i, nc in enumerate(self.columns)]),
                 prop_powers[-1]
             )
-    
+
     def parallel_mzi(self, thetas: np.ndarray = None, phis: np.ndarray = None, phase_style: PhaseStyle = None, use_jax: bool = False, back: bool = False):
         phase_style = self.phase_style if phase_style is None else phase_style
         thetas = self.params[0] if thetas is None else thetas
         phis = self.params[0] if phis is None else phis
         return _parallel_mzi(thetas, phis, self.all_errors, self.all_losses, phase_style, use_jax, back)
-
 
     @property
     def column_ordered(self):
@@ -659,52 +656,52 @@ class ForwardMesh:
 def _parallel_mzi(theta: np.ndarray, phi: np.ndarray,
                   bs_errors: np.ndarray, loss_errors: np.ndarray, phase_style: PhaseStyle,
                   use_jax: bool = False, back: bool = False):
-        """This is a helper function for finding the matrix elements for MZIs in parallel,
-        leading to significant speedup.
+    """This is a helper function for finding the matrix elements for MZIs in parallel,
+    leading to significant speedup.
 
-        Args:
-            theta: theta phases to use.
-            phi: phi phases to use.
-            use_jax: Whether to use jax.
-            back: Go backward through the MZIs
-            mzi_terms: MZI terms (evaluation of the errors for the various mzi matrix elements)
+    Args:
+        theta: theta phases to use.
+        phi: phi phases to use.
+        use_jax: Whether to use jax.
+        back: Go backward through the MZIs
+        mzi_terms: MZI terms (evaluation of the errors for the various mzi matrix elements)
 
-        Returns:
-            A function that accepts the thetas and phis as inputs and outputs the vectorized
-            MZI matrix elements
+    Returns:
+        A function that accepts the thetas and phis as inputs and outputs the vectorized
+        MZI matrix elements
 
-        """
+    """
 
-        xp = jnp if use_jax else np
+    xp = jnp if use_jax else np
 
-        # stands for cos-cos, cos-sin, sin-cos, sin-sin terms.
-        cc, cs, sc, ss = _mzi_terms(bs_errors, use_jax)
-        # insertion (assume a fixed loss that is global for each node) expressed in terms of dB
-        il, ir = np.log(10) * loss_errors.T / 20
+    # stands for cos-cos, cos-sin, sin-cos, sin-sin terms.
+    cc, cs, sc, ss = _mzi_terms(bs_errors, use_jax)
+    # insertion (assume a fixed loss that is global for each node) expressed in terms of dB
+    il, ir = np.log(10) * loss_errors.T / 20
 
-        if phase_style == PhaseStyle.TOP:
-            t11 = (-ss + cc * xp.exp(1j * theta + il)) * xp.exp(1j * phi + ir)
-            t12 = 1j * (cs + sc * xp.exp(1j * theta + il)) * xp.exp((1j * phi + ir) * (1 - back))
-            t21 = 1j * (sc + cs * xp.exp(1j * theta + il)) * xp.exp((1j * phi + ir) * back)
-            t22 = (cc - ss * xp.exp(1j * theta + il))
-        elif phase_style == PhaseStyle.BOTTOM:
-            t11 = (-ss * xp.exp(1j * theta + il) + cc)
-            t12 = 1j * (cs * xp.exp(1j * theta + il) + sc) * xp.exp((1j * phi + ir) * back)
-            t21 = 1j * (sc * xp.exp(1j * theta + il) + cs) * xp.exp((1j * phi + ir) * (1 - back))
-            t22 = (cc * xp.exp(1j * theta + il) - ss) * xp.exp(1j * phi + ir)
-        elif phase_style == PhaseStyle.SYMMETRIC:
-            t11 = (-ss + cc * xp.exp(1j * theta + il)) * xp.exp(1j * (phi - theta / 2) + ir)
-            t12 = 1j * (cs + sc * xp.exp(1j * theta + il)) * xp.exp(1j * (phi - theta / 2) + ir)
-            t21 = 1j * (sc + cs * xp.exp(1j * theta + il)) * xp.exp(1j * (phi - theta / 2) + ir)
-            t22 = (cc - ss * xp.exp(1j * theta + il)) * xp.exp(1j * (phi - theta / 2) + ir)
-        elif phase_style == PhaseStyle.DIFFERENTIAL:
-            t11 = (-ss + cc * xp.exp(1j * theta + il)) * xp.exp(1j * ((-phi - theta) / 2 + phi * back) + ir)
-            t12 = 1j * (cs + sc * xp.exp(1j * theta + il)) * xp.exp(1j * ((-phi - theta) / 2 + phi * back) + ir)
-            t21 = 1j * (sc + cs * xp.exp(1j * theta + il)) * xp.exp(1j * ((phi - theta) / 2 - phi * back) + ir)
-            t22 = (cc - ss * xp.exp(1j * theta + il)) * xp.exp(1j * ((phi - theta) / 2 - phi * back) + ir)
-        else:
-            raise ValueError(f"Phase style {phase_style} is not valid.")
-        return xp.array([t11, t12, t21, t22])
+    if phase_style == PhaseStyle.TOP:
+        t11 = (-ss + cc * xp.exp(1j * theta + il)) * xp.exp(1j * phi + ir)
+        t12 = 1j * (cs + sc * xp.exp(1j * theta + il)) * xp.exp((1j * phi + ir) * (1 - back))
+        t21 = 1j * (sc + cs * xp.exp(1j * theta + il)) * xp.exp((1j * phi + ir) * back)
+        t22 = (cc - ss * xp.exp(1j * theta + il))
+    elif phase_style == PhaseStyle.BOTTOM:
+        t11 = (-ss * xp.exp(1j * theta + il) + cc)
+        t12 = 1j * (cs * xp.exp(1j * theta + il) + sc) * xp.exp((1j * phi + ir) * back)
+        t21 = 1j * (sc * xp.exp(1j * theta + il) + cs) * xp.exp((1j * phi + ir) * (1 - back))
+        t22 = (cc * xp.exp(1j * theta + il) - ss) * xp.exp(1j * phi + ir)
+    elif phase_style == PhaseStyle.SYMMETRIC:
+        t11 = (-ss + cc * xp.exp(1j * theta + il)) * xp.exp(1j * (phi - theta / 2) + ir)
+        t12 = 1j * (cs + sc * xp.exp(1j * theta + il)) * xp.exp(1j * (phi - theta / 2) + ir)
+        t21 = 1j * (sc + cs * xp.exp(1j * theta + il)) * xp.exp(1j * (phi - theta / 2) + ir)
+        t22 = (cc - ss * xp.exp(1j * theta + il)) * xp.exp(1j * (phi - theta / 2) + ir)
+    elif phase_style == PhaseStyle.DIFFERENTIAL:
+        t11 = (-ss + cc * xp.exp(1j * theta + il)) * xp.exp(1j * ((-phi - theta) / 2 + phi * back) + ir)
+        t12 = 1j * (cs + sc * xp.exp(1j * theta + il)) * xp.exp(1j * ((-phi - theta) / 2 + phi * back) + ir)
+        t21 = 1j * (sc + cs * xp.exp(1j * theta + il)) * xp.exp(1j * ((phi - theta) / 2 - phi * back) + ir)
+        t22 = (cc - ss * xp.exp(1j * theta + il)) * xp.exp(1j * ((phi - theta) / 2 - phi * back) + ir)
+    else:
+        raise ValueError(f"Phase style {phase_style} is not valid.")
+    return xp.array([t11, t12, t21, t22])
 
 
 def _parallel_dc(bs_errors: np.ndarray, loss_errors: np.ndarray, right: bool = False, use_jax: bool = False):
@@ -734,9 +731,9 @@ def _mzi_terms(bs_errors: np.ndarray, use_jax: bool = False):
     xp = jnp if use_jax else np
     bs_error_l, bs_error_r = bs_errors.T
     return xp.array((xp.cos(np.pi / 4 + bs_error_r) * xp.cos(np.pi / 4 + bs_error_l),
-            xp.cos(np.pi / 4 + bs_error_r) * xp.sin(np.pi / 4 + bs_error_l),
-            xp.sin(np.pi / 4 + bs_error_r) * xp.cos(np.pi / 4 + bs_error_l),
-            xp.sin(np.pi / 4 + bs_error_r) * xp.sin(np.pi / 4 + bs_error_l)))
+                     xp.cos(np.pi / 4 + bs_error_r) * xp.sin(np.pi / 4 + bs_error_l),
+                     xp.sin(np.pi / 4 + bs_error_r) * xp.cos(np.pi / 4 + bs_error_l),
+                     xp.sin(np.pi / 4 + bs_error_r) * xp.sin(np.pi / 4 + bs_error_l)))
 
 
 def _parallel_transform(v: np.ndarray, matrix_elements: np.ndarray, idx: np.ndarray, use_jax: bool = False):
@@ -767,7 +764,7 @@ def _parallel_transform(v: np.ndarray, matrix_elements: np.ndarray, idx: np.ndar
 
 def _parallel_multiply(v: np.ndarray, phases: np.ndarray, idx: np.ndarray, phase_style: PhaseStyle, use_jax: bool = False):
     top, bottom, node_idxs, mask = idx
-    if phase_style != PhaseStyle.TOP and phase_style !=PhaseStyle.BOTTOM:
+    if phase_style != PhaseStyle.TOP and phase_style != PhaseStyle.BOTTOM:
         raise ValueError(f"Phase style must be TOP or BOTTOM, phase style {phase_style} is not yet supported.")
     idx = top if phase_style == PhaseStyle.TOP else bottom
     if use_jax:
@@ -804,7 +801,7 @@ def _parallel_propagate(inputs: np.ndarray, thetas: np.ndarray, phis: np.ndarray
 
 class InSituBackpropLayer(hk.Module):
     def __init__(self, mesh: ForwardMesh, in_situ_matrix: callable = None,
-                 activation: callable = None, name: str=None,
+                 activation: callable = None, name: str = None,
                  tap_pd_shot_noise: float = 0, io_amp_error_std: float = 0,
                  io_phase_error_std: float = 0, loss_db_std: float = 0, all_analog: bool = True,
                  set_gammas_zero: bool = True, use_jit: bool = True):
@@ -821,15 +818,15 @@ class InSituBackpropLayer(hk.Module):
             loss_db_std: Loss error variation among the components in the mesh
             all_analog: All-analog measurement
             use_jit: JIT compile (should be slow on the first step and fast after that.)
-        
+
         """
         super().__init__(name=name)
         self.mesh: ForwardMesh = mesh
         self.output_size = self.n = mesh.n
         if set_gammas_zero:
-            self.mesh.gammas = np.zeros_like(self.mesh.gammas) # useful hack for this demo
+            self.mesh.gammas = np.zeros_like(self.mesh.gammas)  # useful hack for this demo
         self.mesh = self.mesh.add_error_variance(0, loss_db_std)
-        
+
         if in_situ_matrix is None:
             self.matrix = self.mesh.in_situ_matrix_fn(tap_pd_shot_noise, io_amp_error_std, io_phase_error_std, all_analog)
             self.matrix = jit(self.matrix) if use_jit else self.matrix

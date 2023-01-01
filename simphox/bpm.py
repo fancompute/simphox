@@ -33,13 +33,12 @@ class BPM(SimGrid):
             raise ValueError(f"Simulation dimension ndim must be 2 or 3 but got {self.ndim}.")
         self.init()
 
-
     def init(self, center: Tuple[float, ...] = None, shape: Tuple[float, ...] = None, axis: int = 0):
         # initial scalar fields for fdtd
         center = (0, self.shape[1] // 2, self.shape[2] // 2) if center is None else center
         shape = self.eps[0].shape if shape is None else shape
         self.x = center[0]
-        self.beta, _, self.e, self.h = mode_profile(self, center=center, size=shape, axis=axis)
+        # self.beta, _, self.e, self.h = mode_profile(self, center=center, size=shape, axis=axis)
 
     def adi_polarized(self, te: bool = True):
         """The ADI step for beam propagation method based on https://publik.tuwien.ac.at/files/PubDat_195610.pdf

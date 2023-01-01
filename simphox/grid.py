@@ -79,7 +79,7 @@ class Grid:
                                  f'{self.shape} != {self.eps.shape}')
 
         self.cells = [(self.spacing[i] * np.ones((self.shape[i],)) if self.ndim > 1 else self.spacing * np.ones(self.shape))
-                           if i < self.ndim else np.ones((1,)) for i in range(3)]
+                      if i < self.ndim else np.ones((1,)) for i in range(3)]
         self.pos = [np.hstack((0, np.cumsum(dx))) if dx.size > 1 else np.asarray((0,)) for dx in self.cells]
         self.components = []
 
@@ -345,9 +345,9 @@ class YeeGrid(Grid):
         self.name = name
         if self.pml_shape is not None:
             if np.any(self.pml_shape <= 3) or np.any(self.pml_shape >= self.shape // 2):
-                raise AttributeError(f'PML shape must be more than 3 and less than half the shape on each axis.')
+                raise AttributeError('PML shape must be more than 3 and less than half the shape on each axis.')
         if pml is not None and not len(self.pml_shape) == len(self.shape):
-            raise AttributeError(f'Need len(pml_shape) == grid.shape,'
+            raise AttributeError('Need len(pml_shape) == grid.shape,'
                                  f'got ({len(pml)}, {len(self.shape)}).')
         self.bloch = np.ones_like(self.shape) * np.exp(1j * np.asarray(bloch_phase)) if isinstance(bloch_phase, float) \
             else np.exp(1j * np.asarray(bloch_phase))

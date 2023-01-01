@@ -1,4 +1,4 @@
-from typing import Tuple, Union, List
+from typing import Tuple, Union
 
 import numpy as np
 from enum import Enum

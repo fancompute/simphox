@@ -28,7 +28,7 @@ def _tree(indices: np.ndarray, n_rails: int, start: int = 0, column: int = 0,
     """
     nodes = []
     n = indices.size + 1
-    if balanced == False:
+    if not balanced:
         return [CouplingNode(i, top=i, bottom=i + 1, n=n_rails,
                              alpha=1, beta=n - i - 1, column=n - 2 - i).set_descendants(indices[:i],
                                                                                         np.array([], dtype=np.int32))
@@ -309,7 +309,7 @@ def hessian_fd(v: np.ndarray, error=0.0001, balanced=False):
             h[i, j] = np.real(err(theta_pp) + err(theta_nn) - err(theta_pn) - err(theta_np)) / (4 * error ** 2)
             h[i + n - 1, j + n - 1] = np.real(err(phi_pp) + err(phi_nn) - err(phi_pn) - err(phi_np)) / (4 * error ** 2)
             h[i + n - 1, j] = np.real(err(theta_phi_pp) + err(theta_phi_nn) - err(theta_phi_pn) - err(theta_phi_np)) / (
-                        4 * error ** 2)
+                4 * error ** 2)
             h[j, i + n - 1] = h[i + n - 1, j]
     return h
 

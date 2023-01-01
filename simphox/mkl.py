@@ -1,3 +1,4 @@
+from .typing import Optional
 import sys
 from ctypes import CDLL, byref, c_char, c_int, c_int64, POINTER, c_float, c_double
 
@@ -59,12 +60,10 @@ feast_argtypes = [POINTER(c_char),      # uplo
                   POINTER(c_int)]       # info
 
 sfeast_scsrev, dfeast_scsrev, cfeast_hcsrev, zfeast_hcsrev = mkl.sfeast_scsrev, mkl.dfeast_scsrev,\
-                                                             mkl.cfeast_hcsrev, mkl.zfeast_hcsrev
+    mkl.cfeast_hcsrev, mkl.zfeast_hcsrev
 sfeast_scsrev.argtypes = dfeast_scsrev.argtypes = cfeast_hcsrev.argtypes = zfeast_hcsrev.argtypes = feast_argtypes
 sfeast_scsrev.restype = dfeast_scsrev.restype = cfeast_hcsrev.restype = zfeast_hcsrev.restype = None
 
-
-from .typing import Optional
 
 PARDISO_FREEFACTOR = -1
 PARDISO_FREEALL = 0
