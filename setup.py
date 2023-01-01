@@ -15,7 +15,9 @@ setup(
         'jax',
         'scikit-image',
         'pydantic',
-        'xarray'
+        'xarray',
+        'dm-haiku',
+        'absl-py'
     ],
     extras_require={
         'interactive': ['matplotlib',

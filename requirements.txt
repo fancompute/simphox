@@ -4,5 +4,7 @@ pandas
 pydantic
 matplotlib
 jax
+jaxlib
 scikit-image
-bokeh
+absl-py
+dm-haiku

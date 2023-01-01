@@ -243,10 +243,10 @@ class ForwardMesh:
         m = np.max(num_nodes)
         _bottom = [nc.bottom for nc in cols]
         _node_idxs = [nc.node_idxs for nc in cols]
-        top = np.zeros((len(num_nodes), m), dtype=np.int)
-        bottom = np.zeros((len(num_nodes), m), dtype=np.int)
-        node_idxs = np.zeros((len(num_nodes), m), dtype=np.int)
-        mask = np.zeros((len(num_nodes), m), dtype=np.int)
+        top = np.zeros((len(num_nodes), m), dtype=np.int32)
+        bottom = np.zeros((len(num_nodes), m), dtype=np.int32)
+        node_idxs = np.zeros((len(num_nodes), m), dtype=np.int32)
+        mask = np.zeros((len(num_nodes), m), dtype=np.int32)
 
         # indices to fill to avoid bad overwriting when mask = 0.
         dummy_fill = []
@@ -486,13 +486,12 @@ class ForwardMesh:
         bottom = vector[self.bottom]
         mzi_terms = mzi_terms.T[self.node_idxs].T
         cc, cs, sc, ss = mzi_terms
+        theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
         if self.phase_style == PhaseStyle.SYMMETRIC:
             raise NotImplementedError('Require phase_style not be of the SYMMETRIC variety.')
         elif self.phase_style == PhaseStyle.BOTTOM:
-            theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
             phi = np.angle(top[:, -1]) - np.angle(bottom[:, -1]) + np.pi
         else:
-            theta = transmissivity_to_phase(direct_transmissivity(top[:, -1], bottom[:, -1]), mzi_terms)
             phi = np.angle(bottom[:, -1]) - np.angle(top[:, -1])
         phi += np.angle(-ss + cc * np.exp(-1j * theta)) - np.angle(1j * (cs + np.exp(-1j * theta) * sc))
         return theta, phi
