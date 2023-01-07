@@ -382,8 +382,6 @@ class ForwardMesh:
             inputs /= inorm
             g /= gnorm
 
-            forward = forward_prop_fn(params, inputs, bs_errors, loss_errors)
-
             if all_analog:
                 # instead of using digital subtraction of backpropagating signals, use only forward prop'd signal
                 adjoint_inputs = backward_matrix_fn(params, g, bs_errors, loss_errors).squeeze()
@@ -391,20 +389,25 @@ class ForwardMesh:
                 adjoint_inputs_phase = jnp.angle(adjoint_inputs) + io_phase_error_std * np.random.randn(*adjoint_inputs.shape) * np.pi
                 adjoint_inputs = adjoint_inputs_abs * jnp.exp(1j * adjoint_inputs_phase)
                 adjoint = forward_prop_fn(params, jnp.conj(adjoint_inputs), bs_errors, loss_errors)
+                sum = forward_prop_fn(params, inputs - 1j * jnp.conj(adjoint_inputs), bs_errors, loss_errors)
+                diff = forward_prop_fn(params, inputs + 1j * jnp.conj(adjoint_inputs), bs_errors, loss_errors)
+                sum_abs, diff_abs = jnp.abs(sum), jnp.abs(diff)
+                sum_meas = sum_abs ** 2 + tap_pd_shot_noise * sum_abs * np.random.randn(*sum.shape)
+                diff_meas = diff_abs ** 2 + tap_pd_shot_noise * diff_abs * np.random.randn(*diff.shape)
+                grad_powers = (sum_meas - diff_meas) / 2
             else:
+                forward = forward_prop_fn(params, inputs, bs_errors, loss_errors)
                 adjoint = backward_prop_fn(params, g, bs_errors, loss_errors)[::-1]
                 adjoint_inputs = adjoint[0]
-            sum = forward_prop_fn(params, inputs - 1j * jnp.conj(adjoint_inputs), bs_errors, loss_errors)
-
-            sum_abs, forward_abs, adjoint_abs = jnp.abs(sum), jnp.abs(forward), jnp.abs(adjoint)
-
-            # gradient powers (note that in all-analog update, tap photodetector noise has no effect on learning!)
-            sum_meas = sum_abs ** 2 + tap_pd_shot_noise * sum_abs * np.random.randn(*forward.shape)
-            forward_meas = forward_abs ** 2 + tap_pd_shot_noise * forward_abs * np.random.randn(*forward.shape)
-            adjoint_meas = adjoint_abs ** 2 + tap_pd_shot_noise * adjoint_abs * np.random.randn(*forward.shape)
-            grad_powers = sum_meas - forward_meas - adjoint_meas
+                sum = forward_prop_fn(params, inputs - 1j * jnp.conj(adjoint_inputs), bs_errors, loss_errors)
+                sum_abs, forward_abs, adjoint_abs = jnp.abs(sum), jnp.abs(forward), jnp.abs(adjoint)
+                sum_meas = sum_abs ** 2 + tap_pd_shot_noise * sum_abs * np.random.randn(*forward.shape)
+                forward_meas = forward_abs ** 2 + tap_pd_shot_noise * forward_abs * np.random.randn(*forward.shape)
+                adjoint_meas = adjoint_abs ** 2 + tap_pd_shot_noise * adjoint_abs * np.random.randn(*forward.shape)
+                grad_powers = sum_meas - forward_meas - adjoint_meas
 
             # returns the grad powers at the various gradient positions and adjoint inputs (needed to propagate errors backward to prev layer)
+            # assumes bs errors and loss errors are not modifiable (zero backpropagated gradients for those!)
             return (self.phase_shift_localize(grad_powers / 2 * (inorm * gnorm)), adjoint_inputs, jnp.zeros_like(bs_errors), jnp.zeros_like(loss_errors))
 
         matrix.defvjp(matrix_fwd, matrix_bwd)
